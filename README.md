@@ -87,7 +87,7 @@ The model expects input shape `(batch, 20, 450)` — 20 frames, 225 raw features
 ### 5. Run
 
 ```bash
-uvicorn server:app --reload
+uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 API available at `http://localhost:8000`. Docs at `http://localhost:8000/docs`.
