@@ -20,6 +20,7 @@ from routes_flashcards import router as flashcards_router
 import os
 import logging
 from logging.handlers import RotatingFileHandler
+from scheduler import start_scheduler, stop_scheduler
 
 os.environ["GLOG_minloglevel"] = "3"
 
@@ -35,6 +36,15 @@ logging.basicConfig(level=logging.INFO)
 # ---------------- APP ----------------
 
 app = FastAPI(title="Sign Language API")
+
+
+@app.on_event("startup")
+def on_startup():
+    start_scheduler()
+
+@app.on_event("shutdown")
+def on_shutdown():
+    stop_scheduler()
 
 
 # ---------------- EXCEPTION HANDLERS ----------------
