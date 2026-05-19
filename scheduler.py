@@ -1,7 +1,7 @@
 import logging
 from datetime import date, timedelta
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.background import BackgroundScheduler # type: ignore
 
 from database_connection import SessionLocal
 from database import User, UserSetting, UserStreak, UserXPLog, UserLesson
@@ -32,7 +32,7 @@ def _send_streak_reminders() -> None:
             last = streak.last_activity_at
             if last is None or last.date() < today:
                 try:
-                    send_streak_reminder(user.email, user.username, streak.streak_length, lang=settings.language)
+                    send_streak_reminder(user.email, user.username, streak.streak_length, lang=settings.language) # type: ignore
                     sent += 1
                 except Exception as e:
                     logger.error(f"streak reminder failed for {user.email}: {e}")
@@ -85,8 +85,8 @@ def _send_weekly_summaries() -> None:
                 if total_xp > 0 or lessons_this_week > 0:
                     send_weekly_summary(
                         user.email, user.username,
-                        total_xp, lessons_this_week, current_streak,
-                        lang=settings.language
+                        total_xp, lessons_this_week, current_streak, # type: ignore
+                        lang=settings.language # type: ignore
                     )
             except Exception as e:
                 logger.error(f"weekly summary failed for {user.email}: {e}")

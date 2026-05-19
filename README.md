@@ -9,6 +9,8 @@ FastAPI backend for the SignWave Ukrainian Sign Language learning app.
 - **Keras** — gesture recognition model (GRU with attention, 20 frames × 450 features)
 - **Cloudinary** — avatar/image storage
 - **JWT** + Google OAuth — authentication
+- **APScheduler** — background job scheduler (email notifications)
+- **smtplib** — email delivery via Gmail SMTP (built-in)
 
 ## Project Structure
 
@@ -31,6 +33,9 @@ backend/
 ├── routes_ml.py              # /ml — inference endpoints
 ├── achievement_engine.py     # achievement check logic
 ├── gesture_stat_engine.py    # per-gesture statistics
+├── email_service.py          # email templates & SMTP sending
+├── scheduler.py              # APScheduler jobs (streak reminders, weekly summary)
+├── test_email.py             # send test emails to subscribed users
 ├── models/                   # Keras .keras files (not tracked by git)
 └── .env.example              # environment variable template
 ```
@@ -50,7 +55,7 @@ source venv/bin/activate
 ### 2. Install dependencies
 
 ```bash
-pip install fastapi uvicorn sqlalchemy psycopg2-binary python-jose werkzeug keras tensorflow numpy cloudinary pydantic python-multipart requests
+pip install fastapi uvicorn sqlalchemy psycopg2-binary python-jose werkzeug keras tensorflow numpy cloudinary pydantic python-multipart requests apscheduler
 ```
 
 > If a `requirements.txt` is present: `pip install -r requirements.txt`
@@ -71,7 +76,16 @@ CLOUDINARY_API_KEY=your_api_key
 CLOUDINARY_API_SECRET=your_api_secret
 
 JWT_SECRET_KEY=your_random_secret
+
+# Email notifications (Gmail SMTP)
+MAIL_FROM=your_email@gmail.com
+MAIL_PASSWORD=your_gmail_app_password
+MAIL_SERVER=smtp.gmail.com
+MAIL_PORT=587
+APP_URL=http://localhost:5173
 ```
+
+> **Gmail App Password:** `myaccount.google.com` → Security → Two-step verification → App passwords → create one for "SignWave"
 
 ### 4. Add ML model
 
@@ -136,8 +150,25 @@ Response:
 }
 ```
 
+## Email Notifications
+
+Users can enable email notifications in Settings. Two scheduled jobs run automatically:
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| Streak reminder | Daily at 19:00 | Sent to users who haven't logged in today and have an active streak |
+| Weekly summary | Every Monday at 10:00 | XP earned, lessons completed, current streak for the past 7 days |
+
+Email language matches the user's language setting (Ukrainian / English).
+
+**Test sending** to all subscribed users:
+```bash
+python test_email.py
+```
+
 ## Notes
 
 - CORS is configured for `localhost` and local network IPs (`192.168.x.x`, `10.x.x.x`)
 - Logs are written to `logs/app.log` with rotation (max 10 MB, 7 backups)
 - Database tables are auto-created on startup via `Base.metadata.create_all`
+- Scheduler starts automatically with the server and stops on shutdown
