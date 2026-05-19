@@ -1,0 +1,706 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import func, case
+from sqlalchemy.orm import aliased
+from sqlalchemy.exc import IntegrityError
+from typing import Optional
+
+from database_connection import get_db
+from database import User, Gesture, GestureI18n, GestureSynonym, GestureCategory, LessonGesturesPool, UserGestureStat, UserErrorLog, Lesson, DailyTaskTemplate, Level, LevelI18n, LessonI18n, LessonContent, UserLesson
+from dependencies import get_current_user_id
+from schemas import AdminUserUpdate, AdminTemplateCreate, AdminTemplateUpdate, AdminGestureCreate, AdminGestureUpdate, AdminLessonCreate, AdminLessonUpdate, AdminPoolAdd, AdminContentCreate, AdminContentUpdate, AdminLevelCreate, AdminLevelUpdate
+
+router = APIRouter(prefix="/admin", tags=["Admin"])
+
+
+def require_admin(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> int:
+    user = db.get(User, user_id)
+    if not user or user.role != "admin": # type: ignore
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user_id
+
+
+# ---------------- STATS ----------------
+
+@router.get("/stats")
+def get_stats(admin_id: int = Depends(require_admin), db: Session = Depends(get_db)):
+    return {
+        "total_users":    db.query(func.count(User.id)).scalar() or 0,
+        "active_users":   db.query(func.count(User.id)).filter(User.is_active == True).scalar() or 0,
+        "total_gestures": db.query(func.count(Gesture.id)).scalar() or 0,
+        "active_gestures":db.query(func.count(Gesture.id)).filter(Gesture.is_active == True).scalar() or 0,
+        "total_lessons":  db.query(func.count(Lesson.id)).scalar() or 0,
+        "total_xp":       db.query(func.sum(User.total_xp)).scalar() or 0,
+    }
+
+
+# ---------------- USERS ----------------
+
+@router.get("/users")
+def get_users(
+    search: str = "",
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 25,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    q = db.query(User)
+    if search:
+        q = q.filter(
+            User.username.ilike(f"%{search}%") | User.email.ilike(f"%{search}%")
+        )
+    if role:
+        q = q.filter(User.role == role)
+    if is_active is not None:
+        q = q.filter(User.is_active == is_active)
+    total = q.count()
+    users = q.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
+    return {
+        "total": total,
+        "users": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "email": u.email,
+                "role": u.role,
+                "is_active": u.is_active,
+                "total_xp": u.total_xp or 0,
+                "created_at": u.created_at.strftime("%d %b %Y") if u.created_at else "—", # type: ignore
+            }
+            for u in users
+        ],
+    }
+
+
+@router.patch("/users/{target_id}")
+def update_user(
+    target_id: int,
+    body: AdminUserUpdate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if target_id == admin_id:
+        raise HTTPException(status_code=400, detail="Cannot modify your own account")
+    user = db.get(User, target_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if body.role is not None:
+        user.role = body.role # type: ignore
+    if body.is_active is not None:
+        user.is_active = body.is_active # type: ignore
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/users/{target_id}")
+def delete_user(
+    target_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if target_id == admin_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    user = db.get(User, target_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- GESTURES ----------------
+
+@router.get("/gestures")
+def get_gestures(
+    search: str = "",
+    is_active: Optional[bool] = None,
+    is_dynamic: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 50,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    GestureI18nUK = aliased(GestureI18n)
+    GestureI18nEN = aliased(GestureI18n)
+    q = (
+        db.query(Gesture, GestureI18nUK, GestureI18nEN)
+        .outerjoin(GestureI18nUK, (GestureI18nUK.gesture_id == Gesture.id) & (GestureI18nUK.language_code == "uk"))
+        .outerjoin(GestureI18nEN, (GestureI18nEN.gesture_id == Gesture.id) & (GestureI18nEN.language_code == "en"))
+    )
+    if search:
+        q = q.filter(
+            Gesture.model_label.ilike(f"%{search}%") |
+            GestureI18nUK.name.ilike(f"%{search}%") |
+            GestureI18nEN.name.ilike(f"%{search}%")
+        )
+    if is_active is not None:
+        q = q.filter(Gesture.is_active == is_active)
+    if is_dynamic is not None:
+        q = q.filter(Gesture.is_dynamic == is_dynamic)
+    total = q.count()
+    if search:
+        s = search.lower()
+        relevance = case(
+            (func.lower(GestureI18nUK.name) == s, 0),
+            (func.lower(GestureI18nUK.name).ilike(f"{s}%"), 1),
+            (func.lower(GestureI18nEN.name) == s, 0),
+            (func.lower(GestureI18nEN.name).ilike(f"{s}%"), 1),
+            else_=2,
+        )
+        rows = q.order_by(relevance, Gesture.id).offset(skip).limit(limit).all()
+    else:
+        rows = q.order_by(Gesture.id).offset(skip).limit(limit).all()
+    return {
+        "total": total,
+        "gestures": [
+            {
+                "id": g.id,
+                "name": (gi_uk.name if gi_uk else None) or (gi_en.name if gi_en else "—"),
+                "name_uk": gi_uk.name if gi_uk else "",
+                "name_en": gi_en.name if gi_en else "",
+                "description_uk": gi_uk.description if gi_uk else "",
+                "description_en": gi_en.description if gi_en else "",
+                "model_label": g.model_label,
+                "is_dynamic": g.is_dynamic,
+                "is_active": g.is_active,
+                "video_url": g.video_url or "",
+                "illustration_url": g.illustration_url or "",
+                "thumbnail_url": g.thumbnail_url or "",
+                "created_at": g.created_at.strftime("%d %b %Y") if g.created_at else "—",
+            }
+            for g, gi_uk, gi_en in rows
+        ],
+    }
+
+
+@router.post("/gestures")
+def create_gesture(
+    body: AdminGestureCreate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    gesture = Gesture(
+        model_label=body.model_label,
+        video_url=body.video_url,
+        is_dynamic=body.is_dynamic,
+        is_active=body.is_active,
+        illustration_url=body.illustration_url,
+        thumbnail_url=body.thumbnail_url,
+    )
+    db.add(gesture)
+    db.flush()
+    if body.name_uk.strip():
+        db.add(GestureI18n(gesture_id=gesture.id, language_code="uk", name=body.name_uk.strip(), description=body.description_uk))
+    if body.name_en.strip():
+        db.add(GestureI18n(gesture_id=gesture.id, language_code="en", name=body.name_en.strip(), description=body.description_en))
+    db.commit()
+    db.refresh(gesture)
+    return {"id": gesture.id, "ok": True}
+
+
+@router.delete("/gestures/{gesture_id}")
+def delete_gesture(
+    gesture_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    gesture = db.get(Gesture, gesture_id)
+    if not gesture:
+        raise HTTPException(status_code=404, detail="Gesture not found")
+
+    db.query(UserErrorLog).filter(UserErrorLog.gesture_id == gesture_id).update({"gesture_id": None})
+    db.query(UserGestureStat).filter(UserGestureStat.gesture_id == gesture_id).delete()
+    db.query(LessonGesturesPool).filter(LessonGesturesPool.gesture_id == gesture_id).delete()
+    db.query(GestureCategory).filter(GestureCategory.gesture_id == gesture_id).delete()
+    db.query(GestureSynonym).filter(GestureSynonym.gesture_id == gesture_id).delete()
+
+    db.delete(gesture)
+    db.commit()
+    return {"ok": True}
+
+
+@router.patch("/gestures/{gesture_id}")
+def update_gesture(
+    gesture_id: int,
+    body: AdminGestureUpdate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    gesture = db.get(Gesture, gesture_id)
+    if not gesture:
+        raise HTTPException(status_code=404, detail="Gesture not found")
+    if body.is_active is not None:
+        gesture.is_active = body.is_active # type: ignore
+    if body.is_dynamic is not None:
+        gesture.is_dynamic = body.is_dynamic # type: ignore
+    if body.video_url is not None:
+        gesture.video_url = body.video_url # type: ignore
+    if body.illustration_url is not None:
+        gesture.illustration_url = body.illustration_url # type: ignore
+    if body.thumbnail_url is not None:
+        gesture.thumbnail_url = body.thumbnail_url # type: ignore
+
+    for lang, name, desc in [("uk", body.name_uk, body.description_uk), ("en", body.name_en, body.description_en)]:
+        if name is not None:
+            i18n = db.query(GestureI18n).filter_by(gesture_id=gesture_id, language_code=lang).first()
+            if i18n:
+                i18n.name = name # type: ignore
+                if desc is not None:
+                    i18n.description = desc # type: ignore
+            else:
+                db.add(GestureI18n(gesture_id=gesture_id, language_code=lang, name=name, description=desc))
+
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- DAILY TASK TEMPLATES ----------------
+
+@router.get("/templates")
+def get_templates(
+    task_type: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 25,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    q = db.query(DailyTaskTemplate).order_by(DailyTaskTemplate.id)
+    if task_type:
+        q = q.filter(DailyTaskTemplate.task_type == task_type)
+    if is_active is not None:
+        q = q.filter(DailyTaskTemplate.is_active == is_active)
+    total = q.count()
+    templates = q.offset(skip).limit(limit).all()
+    return {
+        "total": total,
+        "templates": [
+            {
+                "id": t.id,
+                "task_type": t.task_type,
+                "target_value": t.target_value,
+                "xp_reward": t.xp_reward,
+                "is_active": t.is_active,
+            }
+            for t in templates
+        ],
+    }
+
+
+@router.post("/templates")
+def create_template(
+    body: AdminTemplateCreate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    tmpl = DailyTaskTemplate(
+        task_type=body.task_type,
+        target_value=body.target_value,
+        xp_reward=body.xp_reward,
+        is_active=body.is_active,
+    )
+    db.add(tmpl)
+    db.commit()
+    db.refresh(tmpl)
+    return {"id": tmpl.id, "ok": True}
+
+
+@router.patch("/templates/{template_id}")
+def update_template(
+    template_id: int,
+    body: AdminTemplateUpdate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    tmpl = db.get(DailyTaskTemplate, template_id)
+    if not tmpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if body.task_type is not None:
+        tmpl.task_type = body.task_type # type: ignore
+    if body.target_value is not None:
+        tmpl.target_value = body.target_value # type: ignore
+    if body.xp_reward is not None:
+        tmpl.xp_reward = body.xp_reward # type: ignore
+    if body.is_active is not None:
+        tmpl.is_active = body.is_active # type: ignore
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/templates/{template_id}")
+def delete_template(
+    template_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    tmpl = db.get(DailyTaskTemplate, template_id)
+    if not tmpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+    db.delete(tmpl)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- LEVELS (for selectors) ----------------
+
+@router.get("/levels")
+def get_levels(admin_id: int = Depends(require_admin), db: Session = Depends(get_db)):
+    LevelI18nUK = aliased(LevelI18n)
+    LevelI18nEN = aliased(LevelI18n)
+    rows = (
+        db.query(Level, LevelI18nUK, LevelI18nEN)
+        .outerjoin(LevelI18nUK, (LevelI18nUK.level_id == Level.id) & (LevelI18nUK.language_code == "uk"))
+        .outerjoin(LevelI18nEN, (LevelI18nEN.level_id == Level.id) & (LevelI18nEN.language_code == "en"))
+        .order_by(Level.id)
+        .all()
+    )
+    return [
+        {
+            "id": lv.id,
+            "is_active": lv.is_active,
+            "name_uk": li_uk.name if li_uk else "",
+            "name_en": li_en.name if li_en else "",
+            "description_uk": li_uk.description if li_uk else "",
+            "description_en": li_en.description if li_en else "",
+        }
+        for lv, li_uk, li_en in rows
+    ]
+
+
+@router.post("/levels")
+def create_level(
+    body: AdminLevelCreate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    level = Level(is_active=body.is_active)
+    db.add(level)
+    db.flush()
+    if body.name_uk.strip():
+        db.add(LevelI18n(level_id=level.id, language_code="uk", name=body.name_uk.strip(), description=body.description_uk))
+    if body.name_en.strip():
+        db.add(LevelI18n(level_id=level.id, language_code="en", name=body.name_en.strip(), description=body.description_en))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Failed to create level")
+    db.refresh(level)
+    return {"id": level.id, "ok": True}
+
+
+@router.patch("/levels/{level_id}")
+def update_level(
+    level_id: int,
+    body: AdminLevelUpdate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    level = db.get(Level, level_id)
+    if not level:
+        raise HTTPException(status_code=404, detail="Level not found")
+    if body.is_active is not None:
+        level.is_active = body.is_active  # type: ignore
+    for lang, name, desc in [("uk", body.name_uk, body.description_uk), ("en", body.name_en, body.description_en)]:
+        if name is not None:
+            i18n_row = db.query(LevelI18n).filter_by(level_id=level_id, language_code=lang).first()
+            if i18n_row:
+                i18n_row.name = name  # type: ignore
+                if desc is not None:
+                    i18n_row.description = desc  # type: ignore
+            else:
+                db.add(LevelI18n(level_id=level_id, language_code=lang, name=name, description=desc))
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/levels/{level_id}")
+def delete_level(
+    level_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    level = db.get(Level, level_id)
+    if not level:
+        raise HTTPException(status_code=404, detail="Level not found")
+    lesson_ids = [r[0] for r in db.query(Lesson.id).filter(Lesson.level_id == level_id).all()]
+    if lesson_ids:
+        db.query(UserErrorLog).filter(UserErrorLog.lesson_id.in_(lesson_ids)).update({"lesson_id": None}, synchronize_session=False)
+        db.query(LessonGesturesPool).filter(LessonGesturesPool.lesson_id.in_(lesson_ids)).delete(synchronize_session=False)
+        db.query(LessonI18n).filter(LessonI18n.lesson_id.in_(lesson_ids)).delete(synchronize_session=False)
+        db.query(LessonContent).filter(LessonContent.lesson_id.in_(lesson_ids)).delete(synchronize_session=False)
+        db.query(Lesson).filter(Lesson.id.in_(lesson_ids)).delete(synchronize_session=False)
+    db.query(LevelI18n).filter(LevelI18n.level_id == level_id).delete()
+    db.delete(level)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- LESSONS ----------------
+
+@router.get("/lessons")
+def get_lessons(
+    search: str = "",
+    level_id: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 25,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    LessonI18nUK = aliased(LessonI18n)
+    LessonI18nEN = aliased(LessonI18n)
+    q = (
+        db.query(Lesson, LessonI18nUK, LessonI18nEN)
+        .outerjoin(LessonI18nUK, (LessonI18nUK.lesson_id == Lesson.id) & (LessonI18nUK.language_code == "uk"))
+        .outerjoin(LessonI18nEN, (LessonI18nEN.lesson_id == Lesson.id) & (LessonI18nEN.language_code == "en"))
+    )
+    if search:
+        q = q.filter(LessonI18nUK.name.ilike(f"%{search}%") | LessonI18nEN.name.ilike(f"%{search}%"))
+    if level_id is not None:
+        q = q.filter(Lesson.level_id == level_id)
+    if is_active is not None:
+        q = q.filter(Lesson.is_active == is_active)
+    total = q.count()
+    rows = q.order_by(Lesson.level_id, Lesson.order_index).offset(skip).limit(limit).all()
+    return {
+        "total": total,
+        "lessons": [
+            {
+                "id": ls.id,
+                "level_id": ls.level_id,
+                "order_index": ls.order_index,
+                "is_active": ls.is_active,
+                "name_uk": li_uk.name if li_uk else "",
+                "name_en": li_en.name if li_en else "",
+                "description_uk": li_uk.description if li_uk else "",
+                "description_en": li_en.description if li_en else "",
+            }
+            for ls, li_uk, li_en in rows
+        ],
+    }
+
+
+@router.post("/lessons")
+def create_lesson(
+    body: AdminLessonCreate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    lesson = Lesson(level_id=body.level_id, order_index=body.order_index, is_active=body.is_active)
+    db.add(lesson)
+    db.flush()
+    if body.name_uk.strip():
+        db.add(LessonI18n(lesson_id=lesson.id, language_code="uk", name=body.name_uk.strip(), description=body.description_uk))
+    if body.name_en.strip():
+        db.add(LessonI18n(lesson_id=lesson.id, language_code="en", name=body.name_en.strip(), description=body.description_en))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="A lesson with this order index already exists in this level")
+    db.refresh(lesson)
+    return {"id": lesson.id, "ok": True}
+
+
+@router.patch("/lessons/{lesson_id}")
+def update_lesson(
+    lesson_id: int,
+    body: AdminLessonUpdate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    lesson = db.get(Lesson, lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    if body.level_id is not None:
+        lesson.level_id = body.level_id  # type: ignore
+    if body.order_index is not None:
+        lesson.order_index = body.order_index  # type: ignore
+    if body.is_active is not None:
+        lesson.is_active = body.is_active  # type: ignore
+    for lang, name, desc in [("uk", body.name_uk, body.description_uk), ("en", body.name_en, body.description_en)]:
+        if name is not None:
+            i18n_row = db.query(LessonI18n).filter_by(lesson_id=lesson_id, language_code=lang).first()
+            if i18n_row:
+                i18n_row.name = name  # type: ignore
+                if desc is not None:
+                    i18n_row.description = desc  # type: ignore
+            else:
+                db.add(LessonI18n(lesson_id=lesson_id, language_code=lang, name=name, description=desc))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="A lesson with this order index already exists in this level")
+    return {"ok": True}
+
+
+@router.delete("/lessons/{lesson_id}")
+def delete_lesson(
+    lesson_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    lesson = db.get(Lesson, lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    db.query(UserErrorLog).filter(UserErrorLog.lesson_id == lesson_id).update({"lesson_id": None})
+    db.query(LessonGesturesPool).filter(LessonGesturesPool.lesson_id == lesson_id).delete()
+    db.query(LessonI18n).filter(LessonI18n.lesson_id == lesson_id).delete()
+    db.query(LessonContent).filter(LessonContent.lesson_id == lesson_id).delete()
+    db.delete(lesson)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- LESSON GESTURES POOL ----------------
+
+@router.get("/lessons/{lesson_id}/pool")
+def get_lesson_pool(
+    lesson_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(LessonGesturesPool, Gesture, GestureI18n)
+        .join(Gesture, LessonGesturesPool.gesture_id == Gesture.id)
+        .outerjoin(GestureI18n, (GestureI18n.gesture_id == Gesture.id) & (GestureI18n.language_code == "uk"))
+        .filter(LessonGesturesPool.lesson_id == lesson_id)
+        .all()
+    )
+    return [
+        {
+            "id": p.id,
+            "gesture_id": p.gesture_id,
+            "is_new_for_this_lesson": p.is_new_for_this_lesson,
+            "gesture_name": (gi.name if gi else None) or g.model_label,
+        }
+        for p, g, gi in rows
+    ]
+
+
+@router.post("/lessons/{lesson_id}/pool")
+def add_to_pool(
+    lesson_id: int,
+    body: AdminPoolAdd,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if not db.get(Lesson, lesson_id):
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    if db.query(LessonGesturesPool).filter_by(lesson_id=lesson_id, gesture_id=body.gesture_id).first():
+        raise HTTPException(status_code=400, detail="Gesture already in pool")
+    item = LessonGesturesPool(lesson_id=lesson_id, gesture_id=body.gesture_id, is_new_for_this_lesson=body.is_new_for_this_lesson)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "ok": True}
+
+
+@router.delete("/lessons/{lesson_id}/pool/{pool_id}")
+def remove_from_pool(
+    lesson_id: int,
+    pool_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    item = db.query(LessonGesturesPool).filter_by(id=pool_id, lesson_id=lesson_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Pool item not found")
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- LESSON CONTENT (Theory) ----------------
+
+@router.get("/lessons/{lesson_id}/content")
+def get_lesson_content(
+    lesson_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    items = (
+        db.query(LessonContent)
+        .filter(LessonContent.lesson_id == lesson_id)
+        .order_by(LessonContent.order_index, LessonContent.language_code)
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "language_code": c.language_code,
+            "title": c.title or "",
+            "body_text": c.body_text or "",
+            "image_url": c.image_url or "",
+            "order_index": c.order_index,
+        }
+        for c in items
+    ]
+
+
+@router.post("/lessons/{lesson_id}/content")
+def create_content(
+    lesson_id: int,
+    body: AdminContentCreate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if not db.get(Lesson, lesson_id):
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    item = LessonContent(
+        lesson_id=lesson_id,
+        language_code=body.language_code,
+        title=body.title,
+        body_text=body.body_text,
+        image_url=body.image_url,
+        order_index=body.order_index,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "ok": True}
+
+
+@router.patch("/lessons/{lesson_id}/content/{content_id}")
+def update_content(
+    lesson_id: int,
+    content_id: int,
+    body: AdminContentUpdate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    item = db.query(LessonContent).filter_by(id=content_id, lesson_id=lesson_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Content not found")
+    if body.title is not None:
+        item.title = body.title  # type: ignore
+    if body.body_text is not None:
+        item.body_text = body.body_text  # type: ignore
+    if body.image_url is not None:
+        item.image_url = body.image_url  # type: ignore
+    if body.order_index is not None:
+        item.order_index = body.order_index  # type: ignore
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/lessons/{lesson_id}/content/{content_id}")
+def delete_content(
+    lesson_id: int,
+    content_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    item = db.query(LessonContent).filter_by(id=content_id, lesson_id=lesson_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Content not found")
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
