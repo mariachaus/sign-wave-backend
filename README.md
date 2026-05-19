@@ -92,6 +92,8 @@ uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
 API available at `http://localhost:8000`. Docs at `http://localhost:8000/docs`.
 
+`--host 0.0.0.0` makes the server accessible from other devices on the local network (e.g. mobile app running on a phone — use the machine's local IP instead of `localhost`).
+
 ## API Overview
 
 | Prefix | Description |
