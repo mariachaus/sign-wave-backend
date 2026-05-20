@@ -1,3 +1,6 @@
+import secrets
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 import requests as http_requests
@@ -5,12 +8,14 @@ import requests as http_requests
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from database_connection import get_db
-from database import User, UserSetting, UserStreak, UserAchievement, Achievement
+from database import User, UserSetting, UserStreak, UserAchievement, Achievement, PasswordResetToken
+from email_service import send_password_reset
 
 from auth_utils import create_access_token
-from schemas import RegisterRequest, LoginRequest, GoogleLoginRequest
+from schemas import RegisterRequest, LoginRequest, GoogleLoginRequest, ForgotPasswordRequest, ResetPasswordRequest
 
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+_RESET_TOKEN_TTL_HOURS = 1
 
 router = APIRouter(tags=["Auth"])
 
@@ -179,3 +184,57 @@ def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
         "username": user.username,
         "user_id": user.id
     }
+
+
+# ---------------- FORGOT PASSWORD ----------------
+
+_SAFE_RESPONSE = {"message": "If this email is registered, you will receive a reset link."}
+
+@router.post("/forgot-password")
+def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == data.email).first()
+
+    # Return same response regardless — avoids email enumeration
+    if not user or not user.password_hash:
+        return _SAFE_RESPONSE
+
+    # Replace any existing token for this user
+    db.query(PasswordResetToken).filter_by(user_id=user.id).delete()
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=_RESET_TOKEN_TTL_HOURS)
+    db.add(PasswordResetToken(user_id=user.id, token=token, expires_at=expires_at))
+    db.commit()
+
+    lang = user.settings.language if user.settings else "uk"
+    try:
+        send_password_reset(user.email, user.username, token, lang=lang)
+    except Exception as e:
+        # Don't expose email errors to the client
+        import logging
+        logging.getLogger("signwave").error(f"password reset email failed for {user.email}: {e}")
+
+    return _SAFE_RESPONSE
+
+
+# ---------------- RESET PASSWORD ----------------
+
+@router.post("/reset-password")
+def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    reset_token = db.query(PasswordResetToken).filter_by(token=data.token).first()
+
+    if not reset_token or reset_token.expires_at < datetime.utcnow():
+        if reset_token:
+            db.delete(reset_token)
+            db.commit()
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user = db.query(User).filter_by(id=reset_token.user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user.password_hash = generate_password_hash(data.new_password)  # type: ignore
+    db.delete(reset_token)
+    db.commit()
+
+    return {"message": "Password updated successfully"}

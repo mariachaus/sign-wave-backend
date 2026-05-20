@@ -34,6 +34,12 @@ _T = {
         "weekly_xp":          "XP зароблено",
         "weekly_lessons":     "Уроків пройдено",
         "weekly_streak":      "Днів поспіль 🔥",
+
+        "reset_subject":      "🔑 Відновлення паролю SignWave",
+        "reset_heading":      "Привіт, {username}!",
+        "reset_body":         "Ми отримали запит на відновлення паролю для твого акаунту.",
+        "reset_btn":          "Відновити пароль →",
+        "reset_note":         "Посилання дійсне 1 годину. Якщо ти не надсилав(ла) цей запит — просто проігноруй цей лист.",
     },
     "en": {
         "unsubscribe":        "Unsubscribe",
@@ -54,6 +60,12 @@ _T = {
         "weekly_xp":          "XP earned",
         "weekly_lessons":     "Lessons completed",
         "weekly_streak":      "Day streak 🔥",
+
+        "reset_subject":      "🔑 SignWave password reset",
+        "reset_heading":      "Hey, {username}!",
+        "reset_body":         "We received a request to reset the password for your account.",
+        "reset_btn":          "Reset password →",
+        "reset_note":         "This link is valid for 1 hour. If you didn't request this — just ignore this email.",
     },
 }
 
@@ -93,7 +105,7 @@ def _send(to: str, subject: str, html: str) -> None:
 def _base_template(lang: str, content: str) -> str:
     return f"""
     <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e;">
-      <div style="background:#4f46e5;padding:24px 32px;border-radius:12px 12px 0 0;">
+      <div style="background:#7c3aed;padding:24px 32px;border-radius:12px 12px 0 0;">
         <h1 style="color:#fff;margin:0;font-size:22px;letter-spacing:-0.5px;">SignWave 🤟</h1>
       </div>
       <div style="background:#f8f8fc;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5f0;">
@@ -101,7 +113,7 @@ def _base_template(lang: str, content: str) -> str:
         <hr style="border:none;border-top:1px solid #e5e5f0;margin:24px 0;">
         <p style="font-size:12px;color:#999;margin:0;">
           {_tr(lang, "unsubscribe_note")}<br>
-          <a href="{APP_URL}/settings" style="color:#4f46e5;">{_tr(lang, "unsubscribe")}</a>
+          <a href="{APP_URL}/settings" style="color:#7c3aed;">{_tr(lang, "unsubscribe")}</a>
         </p>
       </div>
     </div>
@@ -119,7 +131,7 @@ def send_streak_reminder(to: str, username: str, streak: int, lang: str = "uk") 
       </p>
       <p style="color:#666;margin:0 0 24px;">{_tr(lang, "streak_cta")}</p>
       <a href="{APP_URL}" style="
-        display:inline-block;background:#4f46e5;color:#fff;
+        display:inline-block;background:#7c3aed;color:#fff;
         padding:12px 28px;border-radius:8px;text-decoration:none;
         font-weight:600;font-size:15px;">
         {_tr(lang, "continue_btn")}
@@ -134,12 +146,12 @@ def send_weekly_summary(to: str, username: str, xp: int, lessons: int, streak: i
       <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
         <tr>
           <td style="padding:12px;background:#fff;border:1px solid #e5e5f0;border-radius:8px;text-align:center;width:33%;">
-            <div style="font-size:28px;font-weight:700;color:#4f46e5;">{xp}</div>
+            <div style="font-size:28px;font-weight:700;color:#7c3aed;">{xp}</div>
             <div style="font-size:12px;color:#888;margin-top:4px;">{_tr(lang, "weekly_xp")}</div>
           </td>
           <td style="width:12px;"></td>
           <td style="padding:12px;background:#fff;border:1px solid #e5e5f0;border-radius:8px;text-align:center;width:33%;">
-            <div style="font-size:28px;font-weight:700;color:#4f46e5;">{lessons}</div>
+            <div style="font-size:28px;font-weight:700;color:#7c3aed;">{lessons}</div>
             <div style="font-size:12px;color:#888;margin-top:4px;">{_tr(lang, "weekly_lessons")}</div>
           </td>
           <td style="width:12px;"></td>
@@ -150,13 +162,29 @@ def send_weekly_summary(to: str, username: str, xp: int, lessons: int, streak: i
         </tr>
       </table>
       <a href="{APP_URL}" style="
-        display:inline-block;background:#4f46e5;color:#fff;
+        display:inline-block;background:#7c3aed;color:#fff;
         padding:12px 28px;border-radius:8px;text-decoration:none;
         font-weight:600;font-size:15px;">
         {_tr(lang, "open_btn")}
       </a>
     """
     _send(to, _tr(lang, "weekly_subject"), _base_template(lang, content))
+
+
+def send_password_reset(to: str, username: str, token: str, lang: str = "uk") -> None:
+    reset_url = f"{APP_URL}/reset-password?token={token}"
+    content = f"""
+      <h2 style="margin:0 0 12px;">{_tr(lang, "reset_heading", username=username)}</h2>
+      <p style="font-size:16px;margin:0 0 20px;">{_tr(lang, "reset_body")}</p>
+      <a href="{reset_url}" style="
+        display:inline-block;background:#7c3aed;color:#fff;
+        padding:12px 28px;border-radius:8px;text-decoration:none;
+        font-weight:600;font-size:15px;">
+        {_tr(lang, "reset_btn")}
+      </a>
+      <p style="font-size:13px;color:#888;margin:20px 0 0;">{_tr(lang, "reset_note")}</p>
+    """
+    _send(to, _tr(lang, "reset_subject"), _base_template(lang, content))
 
 
 def send_test_email(to: str, username: str = "User", lang: str = "uk") -> None:
