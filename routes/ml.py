@@ -276,6 +276,43 @@ def _process_frame(img_bytes: bytes):
     return pose_res, hand_res, lm
 
 
+@router.websocket("/ws/predict")
+async def predict_ws(websocket: WebSocket):
+    """WebSocket для веб-клієнта: приймає координати (20×450), повертає передбачення."""
+    await websocket.accept()
+    if model is None:
+        await websocket.send_text(json.dumps({"error": "Model not loaded"}))
+        await websocket.close()
+        return
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            data = json.loads(raw)
+            features = data.get("features")
+            if not features:
+                await websocket.send_text(json.dumps({"error": "no features"}))
+                continue
+            input_data = np.array(features, dtype=np.float32)
+            if input_data.shape != (20, 450):
+                input_data = input_data.reshape(1, 20, 450)
+            else:
+                input_data = np.expand_dims(input_data, axis=0)
+            prediction = model(input_data, training=False).numpy()
+            class_id = int(np.argmax(prediction))
+            confidence = float(prediction[0][class_id])
+            label = LABELS[class_id]
+            all_scores = {LABELS[i]: round(float(prediction[0][i]), 4) for i in range(len(LABELS))}
+            await websocket.send_text(json.dumps({
+                "label": label,
+                "confidence": confidence,
+                "all_scores": all_scores,
+            }))
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[WS/predict] {e}")
+
+
 @router.websocket("/ws/gesture")
 async def gesture_ws(websocket: WebSocket):
     await websocket.accept()
