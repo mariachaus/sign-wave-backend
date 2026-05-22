@@ -3,24 +3,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from database_connection import engine, SessionLocal
-from database import Base
+from db.connection import engine, SessionLocal
+from db.models import Base
 
 # routes
-from routes_ml import router as ml_router
-from auth import router as auth_router
-from routes_user import router as user_router
-from routes_settings import router as settings_router
-from routes_gestures import router as gestures_router
-from routes_lesson import router as lessons_router
-from routes_daily import router as daily_router
-from routes_admin import router as admin_router
-from routes_flashcards import router as flashcards_router
+from routes.ml import router as ml_router
+from routes.auth import router as auth_router
+from routes.user import router as user_router
+from routes.settings import router as settings_router
+from routes.gestures import router as gestures_router
+from routes.lesson import router as lessons_router
+from routes.daily import router as daily_router
+from routes.admin import router as admin_router
+from routes.flashcards import router as flashcards_router
 
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-from scheduler import start_scheduler, stop_scheduler
+from services.scheduler import start_scheduler, stop_scheduler
 
 os.environ["GLOG_minloglevel"] = "3"
 
@@ -106,7 +106,7 @@ def root():
 def test_db():
     try:
         db = SessionLocal()
-        from database import User
+        from db.models import User
         count = db.query(User).count()
         db.close()
         return {"status": "connected", "users_in_db": count}

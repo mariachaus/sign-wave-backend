@@ -1,6 +1,6 @@
 from jose import jwt, JWTError
 from fastapi import HTTPException, Header
-from auth_utils import SECRET_KEY, ALGORITHM
+from services.auth_utils import SECRET_KEY, ALGORITHM
 
 
 def get_current_user_id(authorization: str = Header(None)):

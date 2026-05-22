@@ -1,9 +1,8 @@
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from database_connection import get_db
-# Додай нові моделі I18n в імпорт
-from database import Gesture, Category, GestureCategory, GestureSynonym, GestureI18n, CategoryI18n
+from db.connection import get_db
+from db.models import Gesture, Category, GestureCategory, GestureSynonym, GestureI18n, CategoryI18n
 
 router = APIRouter( tags=["Gestures"])
 
@@ -56,14 +55,16 @@ def get_gestures(lang: str = "en", db: Session = Depends(get_db)):
 
         output.append({
             "id": g.id,
-            "name": t.name, # Беремо з таблиці перекладів
+            "name": t.name,
             "video_url": g.video_url,
             "difficulty": float(g.base_difficulty_rate),
             "is_dynamic": g.is_dynamic,
             "synonyms": [s.name for s in synonyms],
-            "description": t.description, # Беремо з таблиці перекладів
+            "description": t.description,
             "thumbnail_url": g.thumbnail_url,
-            "categories": [c.name for c in categories] 
+            "illustration_url": g.illustration_url or g.thumbnail_url,
+            "model_label": g.model_label,
+            "categories": [c.name for c in categories]
         })
 
     return output

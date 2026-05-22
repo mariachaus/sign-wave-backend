@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from database_connection import get_db
-from database import UserDailyTask, DailyTaskTemplate, Gesture, GestureI18n, UserXPLog, User, UserGestureStat, UserStreak
-from dependencies import get_current_user_id
+from db.connection import get_db
+from db.models import UserDailyTask, DailyTaskTemplate, Gesture, GestureI18n, UserXPLog, User, UserGestureStat, UserStreak
+from core.dependencies import get_current_user_id
 
 router = APIRouter(prefix="/daily-tasks", tags=["Daily Tasks"])
 

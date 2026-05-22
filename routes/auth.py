@@ -7,11 +7,11 @@ import requests as http_requests
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from database_connection import get_db
-from database import User, UserSetting, UserStreak, UserAchievement, Achievement, PasswordResetToken
-from email_service import send_password_reset
+from db.connection import get_db
+from db.models import User, UserSetting, UserStreak, UserAchievement, Achievement, PasswordResetToken
+from services.email_service import send_password_reset
 
-from auth_utils import create_access_token
+from services.auth_utils import create_access_token
 from schemas import RegisterRequest, LoginRequest, GoogleLoginRequest, ForgotPasswordRequest, ResetPasswordRequest
 
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"

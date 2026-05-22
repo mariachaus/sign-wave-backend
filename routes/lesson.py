@@ -8,22 +8,22 @@ from sqlalchemy import func
 from typing import List
 from datetime import datetime, timedelta, timezone
 
-from database_connection import get_db
-from database import (
+from db.connection import get_db
+from db.models import (
     Lesson, LessonI18n, LessonContent, LessonGesturesPool,
     Gesture, GestureI18n, UserLesson, User, UserErrorLog,
     Level, LevelI18n, UserGestureStat, UserStreak, UserXPLog
 )
-from routes_daily import update_task_progress
-from achievement_engine import check_after_practice, check_after_lesson
-from gesture_stat_engine import update_gesture_stat
+from routes.daily import update_task_progress
+from services.achievement_engine import check_after_practice, check_after_lesson
+from services.gesture_stat_engine import update_gesture_stat
 from schemas import LessonStartResponse, LessonCompleteRequest, ErrorDetail
 from pydantic import BaseModel
 
 class PracticeCompleteRequest(BaseModel):
     errors: list[ErrorDetail] = []
 
-from dependencies import get_current_user_id
+from core.dependencies import get_current_user_id
 
 router = APIRouter(prefix="/lessons", tags=["Lessons"])
 

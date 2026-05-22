@@ -5,10 +5,10 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from database import Gesture, GestureI18n, UserGestureStat, UserErrorLog
-from database_connection import get_db
-from dependencies import get_current_user_id
-from gesture_stat_engine import update_gesture_stat
+from db.models import Gesture, GestureI18n, UserGestureStat, UserErrorLog
+from db.connection import get_db
+from core.dependencies import get_current_user_id
+from services.gesture_stat_engine import update_gesture_stat
 
 router = APIRouter(prefix="/flashcards", tags=["Flashcards"])
 

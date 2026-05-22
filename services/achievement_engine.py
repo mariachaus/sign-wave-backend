@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from database import Achievement, UserAchievement, User, UserStreak, UserLesson, Lesson, UserXPLog, UserGestureStat
+from db.models import Achievement, UserAchievement, User, UserStreak, UserLesson, Lesson, UserXPLog, UserGestureStat
 
 _SHIELD_ACHIEVEMENTS = {3, 4, 5, 9, 10, 11}
 _LEVEL_MASTER = {1: 9, 2: 10, 3: 11}

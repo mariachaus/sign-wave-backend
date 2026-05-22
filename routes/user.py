@@ -15,9 +15,9 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET"),
 )
 
-from dependencies import get_current_user_id
-from database_connection import get_db
-from database import (
+from core.dependencies import get_current_user_id
+from db.connection import get_db
+from db.models import (
     User,
     UserStreak,
     UserErrorLog,

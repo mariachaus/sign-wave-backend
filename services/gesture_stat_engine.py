@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 from math import ceil
 from sqlalchemy.orm import Session
-from database import UserGestureStat
+from db.models import UserGestureStat
 
 # SM-2 adapted: base intervals (days) per mastery stage after a correct review
 _STAGE_INTERVALS = {0: 1, 1: 6, 2: 14, 3: 30}

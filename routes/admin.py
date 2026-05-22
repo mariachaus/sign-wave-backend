@@ -5,9 +5,9 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from typing import Optional
 
-from database_connection import get_db
-from database import User, Gesture, GestureI18n, GestureSynonym, GestureCategory, LessonGesturesPool, UserGestureStat, UserErrorLog, Lesson, DailyTaskTemplate, Level, LevelI18n, LessonI18n, LessonContent, UserLesson
-from dependencies import get_current_user_id
+from db.connection import get_db
+from db.models import User, Gesture, GestureI18n, GestureSynonym, GestureCategory, LessonGesturesPool, UserGestureStat, UserErrorLog, Lesson, DailyTaskTemplate, Level, LevelI18n, LessonI18n, LessonContent, UserLesson
+from core.dependencies import get_current_user_id
 from schemas import AdminUserUpdate, AdminTemplateCreate, AdminTemplateUpdate, AdminGestureCreate, AdminGestureUpdate, AdminLessonCreate, AdminLessonUpdate, AdminPoolAdd, AdminContentCreate, AdminContentUpdate, AdminLevelCreate, AdminLevelUpdate
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -255,6 +255,53 @@ def update_gesture(
             else:
                 db.add(GestureI18n(gesture_id=gesture_id, language_code=lang, name=name, description=desc))
 
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- SYNONYMS ----------------
+
+@router.get("/gestures/{gesture_id}/synonyms")
+def get_synonyms(
+    gesture_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rows = db.query(GestureSynonym).filter_by(gesture_id=gesture_id).order_by(GestureSynonym.language_code).all()
+    return [{"id": r.id, "name": r.name, "language_code": r.language_code} for r in rows]
+
+
+@router.post("/gestures/{gesture_id}/synonyms")
+def add_synonym(
+    gesture_id: int,
+    body: dict,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    name = (body.get("name") or "").strip()
+    lang = body.get("language_code", "uk")
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if not db.get(Gesture, gesture_id):
+        raise HTTPException(status_code=404, detail="Gesture not found")
+    syn = GestureSynonym(gesture_id=gesture_id, name=name, language_code=lang)
+    db.add(syn)
+    db.commit()
+    db.refresh(syn)
+    return {"id": syn.id, "name": syn.name, "language_code": syn.language_code}
+
+
+@router.delete("/gestures/{gesture_id}/synonyms/{synonym_id}")
+def delete_synonym(
+    gesture_id: int,
+    synonym_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    syn = db.query(GestureSynonym).filter_by(id=synonym_id, gesture_id=gesture_id).first()
+    if not syn:
+        raise HTTPException(status_code=404, detail="Synonym not found")
+    db.delete(syn)
     db.commit()
     return {"ok": True}
 

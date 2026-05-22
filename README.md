@@ -6,7 +6,8 @@ FastAPI backend for the SignWave Ukrainian Sign Language learning app.
 
 - **FastAPI** — REST API
 - **PostgreSQL** + SQLAlchemy — database
-- **Keras** — gesture recognition model (GRU with attention, 20 frames × 450 features)
+- **Keras / TensorFlow** — gesture recognition model (GRU with attention, 20 frames × 450 features)
+- **MediaPipe** + **OpenCV** — server-side landmark extraction (WebSocket inference for mobile)
 - **Cloudinary** — avatar/image storage
 - **JWT** + Google OAuth — authentication
 - **APScheduler** — background job scheduler (email notifications)
@@ -16,28 +17,39 @@ FastAPI backend for the SignWave Ukrainian Sign Language learning app.
 
 ```
 backend/
-├── server.py                 # app entry point, routers, CORS, logging
-├── database.py               # SQLAlchemy models
-├── database_connection.py    # engine & session
-├── schemas.py                # Pydantic request/response schemas
-├── dependencies.py           # get_current_user_id dependency
-├── auth.py                   # /api/auth — register, login, Google OAuth
-├── auth_utils.py             # JWT token creation
-├── routes_user.py            # /api/user — profile
-├── routes_settings.py        # /api/settings — user settings
-├── routes_gestures.py        # /api/gestures — gesture library
-├── routes_lesson.py          # /api/lessons — lessons & practice
-├── routes_daily.py           # /api — daily tasks & streak
-├── routes_flashcards.py      # /api — flashcards
-├── routes_admin.py           # /api — admin panel
-├── routes_ml.py              # /ml — inference endpoints
-├── achievement_engine.py     # achievement check logic
-├── gesture_stat_engine.py    # per-gesture statistics
-├── email_service.py          # email templates & SMTP sending
-├── scheduler.py              # APScheduler jobs (streak reminders, weekly summary)
-├── test_email.py             # send test emails to subscribed users
-├── models/                   # Keras .keras files (not tracked by git)
-└── .env.example              # environment variable template
+├── server.py                     # app entry point, routers, CORS, logging
+├── schemas.py                    # Pydantic request/response schemas
+├── test_email.py                 # send test emails to subscribed users
+├── requirements.txt
+├── core/
+│   └── dependencies.py           # get_current_user_id dependency
+├── db/
+│   ├── models.py                 # SQLAlchemy models
+│   └── connection.py             # engine & session
+├── routes/
+│   ├── auth.py                   # /api/auth — register, login, Google OAuth, password reset
+│   ├── user.py                   # /api/user — profile
+│   ├── settings.py               # /api/settings — user settings
+│   ├── gestures.py               # /api/gestures — gesture library
+│   ├── lesson.py                 # /api/lessons — lessons & practice
+│   ├── daily.py                  # /api — daily tasks & streak
+│   ├── flashcards.py             # /api — flashcards
+│   ├── admin.py                  # /api — admin panel
+│   └── ml.py                     # /ml — inference endpoints & WebSocket
+├── services/
+│   ├── auth_utils.py             # JWT token creation
+│   ├── achievement_engine.py     # achievement check logic
+│   ├── gesture_stat_engine.py    # per-gesture statistics
+│   ├── email_service.py          # email templates & SMTP sending
+│   └── scheduler.py              # APScheduler jobs (streak reminders, weekly summary)
+├── tests/
+│   ├── conftest.py
+│   ├── test_auth.py
+│   ├── test_gesture_stat.py
+│   ├── test_ml_features.py
+│   ├── test_schemas.py
+│   └── test_streak.py
+└── models/                       # Keras .keras files + MediaPipe .task files (not tracked by git)
 ```
 
 ## Setup
@@ -55,10 +67,8 @@ source venv/bin/activate
 ### 2. Install dependencies
 
 ```bash
-pip install fastapi uvicorn sqlalchemy psycopg2-binary python-jose werkzeug keras tensorflow numpy cloudinary pydantic python-multipart requests apscheduler
+pip install -r requirements.txt
 ```
-
-> If a `requirements.txt` is present: `pip install -r requirements.txt`
 
 ### 3. Configure environment
 
@@ -87,14 +97,23 @@ APP_URL=http://localhost:5173
 
 > **Gmail App Password:** `myaccount.google.com` → Security → Two-step verification → App passwords → create one for "SignWave"
 
-### 4. Add ML model
+### 4. Add ML model files
 
-Place the Keras model file in `models/`:
+Place the following files in `models/`:
 
 ```
 models/sign_language_gru_attention_model-20.keras
-models/gesture_classes_gru_attention-20.json
+models/gesture_classes_cnn1d-20.json
 ```
+
+For WebSocket inference (mobile app), also add MediaPipe task files:
+
+```
+models/mediapipe/pose_landmarker_lite.task
+models/mediapipe/hand_landmarker.task
+```
+
+Download from: https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
 
 The model expects input shape `(batch, 20, 450)` — 20 frames, 225 raw features + 225 delta features per frame.
 
@@ -114,9 +133,12 @@ API available at `http://localhost:8000`. Docs at `http://localhost:8000/docs`.
 |---|---|
 | `POST /ml/predict` | Single gesture prediction (20 frames) |
 | `POST /ml/predict_batch` | Sliding window batch prediction |
+| `WS /ml/ws/gesture` | WebSocket: frame-by-frame inference with MediaPipe (mobile) |
 | `POST /api/auth/register` | Register with email/password |
 | `POST /api/auth/login` | Login, returns JWT |
 | `POST /api/auth/google` | Login via Google OAuth token |
+| `POST /api/auth/forgot-password` | Send password reset email |
+| `POST /api/auth/reset-password` | Reset password via token |
 | `GET/PUT /api/user/...` | Profile & avatar |
 | `GET/PUT /api/settings/...` | User settings |
 | `GET /api/gestures` | Gesture library |
@@ -150,6 +172,19 @@ Response:
 }
 ```
 
+**`WS /ml/ws/gesture`**
+
+Send frames as JSON: `{ "frame": "<base64-encoded JPEG>" }`
+
+Responses:
+```json
+{ "status": "collecting", "buffer_size": 12, "lm": { ... } }
+{ "status": "prediction", "label": "love", "confidence": 0.87, "buffer_size": 20, "lm": { ... } }
+{ "status": "no_person", "buffer_size": 0 }
+```
+
+`lm` contains raw landmark coordinates for skeleton drawing on the client.
+
 ## Email Notifications
 
 Users can enable email notifications in Settings. Two scheduled jobs run automatically:
@@ -166,9 +201,16 @@ Email language matches the user's language setting (Ukrainian / English).
 python test_email.py
 ```
 
+## Tests
+
+```bash
+pytest tests/
+```
+
 ## Notes
 
 - CORS is configured for `localhost` and local network IPs (`192.168.x.x`, `10.x.x.x`)
 - Logs are written to `logs/app.log` with rotation (max 10 MB, 7 backups)
 - Database tables are auto-created on startup via `Base.metadata.create_all`
 - Scheduler starts automatically with the server and stops on shutdown
+- MediaPipe WebSocket endpoint silently skips if `mediapipe`/`opencv` packages are not installed

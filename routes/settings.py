@@ -4,9 +4,9 @@ from datetime import datetime
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from database_connection import get_db
-from database import User, UserSetting
-from dependencies import get_current_user_id
+from db.connection import get_db
+from db.models import User, UserSetting
+from core.dependencies import get_current_user_id
 
 router = APIRouter(tags=["Settings"])
 

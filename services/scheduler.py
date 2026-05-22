@@ -3,9 +3,9 @@ from datetime import date, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler # type: ignore
 
-from database_connection import SessionLocal
-from database import User, UserSetting, UserStreak, UserXPLog, UserLesson
-from email_service import send_streak_reminder, send_weekly_summary
+from db.connection import SessionLocal
+from db.models import User, UserSetting, UserStreak, UserXPLog, UserLesson
+from services.email_service import send_streak_reminder, send_weekly_summary
 
 logger = logging.getLogger("signwave")
 scheduler = BackgroundScheduler()
