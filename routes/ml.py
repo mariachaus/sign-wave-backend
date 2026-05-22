@@ -46,7 +46,7 @@ else:
 
 LABELS = []
 
-labels_path = os.path.join(MODELS_DIR, "gesture_classes_cnn1d-20.json")
+labels_path = os.path.join(MODELS_DIR, "gesture_classes_gru_attention-20.json")
 
 if os.path.exists(labels_path):
     with open(labels_path, "r", encoding="utf-8") as f:
