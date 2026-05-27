@@ -28,11 +28,11 @@ def _send_streak_reminders() -> None:
             .all()
         )
         sent = 0
-        for user, _, streak in rows:
+        for user, settings, streak in rows:
             last = streak.last_activity_at
             if last is None or last.date() < today:
                 try:
-                    send_streak_reminder(user.email, user.username, streak.streak_length, lang=settings.language) # type: ignore
+                    send_streak_reminder(user.email, user.username, streak.streak_length, lang=settings.language if settings else "uk")
                     sent += 1
                 except Exception as e:
                     logger.error(f"streak reminder failed for {user.email}: {e}")
@@ -52,7 +52,7 @@ def _send_weekly_summaries() -> None:
             .filter(UserSetting.is_email_notifications_enabled == True)
             .all()
         )
-        for user, _ in users_with_settings:
+        for user, settings in users_with_settings:
             try:
                 xp_this_week = (
                     db.query(UserXPLog)
@@ -86,7 +86,7 @@ def _send_weekly_summaries() -> None:
                     send_weekly_summary(
                         user.email, user.username,
                         total_xp, lessons_this_week, current_streak, # type: ignore
-                        lang=settings.language # type: ignore
+                        lang=settings.language if settings else "uk"
                     )
             except Exception as e:
                 logger.error(f"weekly summary failed for {user.email}: {e}")
