@@ -276,6 +276,8 @@ def practice_gesture(
         {"type": "quiz", "mode": "image_to_word", "target": target, "options": _quiz_opts()},
         {"type": "recall", "gesture": target},
     ]
+    if target.get("description"):
+        rest.append({"type": "identify", "target": target, "options": _quiz_opts()})
     if len(all_pool) >= 3:
         rest.append({"type": "matching", "gestures": _match_pool()})
         rest.append({"type": "matching", "gestures": _match_pool()})
@@ -597,30 +599,39 @@ def start_lesson(
             interactive_steps.append({"type": "matching", "gestures": matching_pool})
             review_left -= 1
 
-    # Решта: quiz та recall
+    # Решта: quiz, recall, identify
     if N > 0 and review_left > 0:
         cycle_quiz   = itertools.cycle(lesson_dicts)
         cycle_recall = itertools.cycle(lesson_dicts_cam) if lesson_dicts_cam else None
         for i in range(review_left):
-            if i % 2 == 0:
+            r = i % 3
+            if r == 0:
                 target = next(cycle_quiz)
-                mode = "word_to_image" if (i // 2) % 2 == 0 else "image_to_word"
+                mode = "word_to_image" if (i // 3) % 2 == 0 else "image_to_word"
                 interactive_steps.append({
                     "type": "quiz",
                     "mode": mode,
                     "target": target,
                     "options": all_pool,
                 })
-            elif cycle_recall:
+            elif r == 1 and cycle_recall:
                 interactive_steps.append({"type": "recall", "gesture": next(cycle_recall)})
             else:
                 target = next(cycle_quiz)
-                interactive_steps.append({
-                    "type": "quiz",
-                    "mode": "image_to_word",
-                    "target": target,
-                    "options": all_pool,
-                })
+                if target.get("description"):
+                    interactive_steps.append({
+                        "type": "identify",
+                        "target": target,
+                        "options": all_pool,
+                    })
+                else:
+                    mode = "image_to_word"
+                    interactive_steps.append({
+                        "type": "quiz",
+                        "mode": mode,
+                        "target": target,
+                        "options": all_pool,
+                    })
 
     # Рандомний бонус: 0-2 додаткових quiz зверху
     if N > 0 and random.random() < 0.5:
