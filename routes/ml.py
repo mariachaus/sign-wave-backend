@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import random
+import threading
 from typing import Any
 
 import numpy as np
@@ -22,7 +23,7 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 
 
-model_path = os.path.join(MODELS_DIR, "sign_language_gru_attention_model-20.keras")
+model_path = os.path.join(MODELS_DIR, "sign_language_transformer_model-20.keras")
 
 model: Any = None
 
@@ -53,22 +54,25 @@ if os.path.exists(labels_path):
         LABELS = json.load(f)
     print(f"✅ ML: Labels loaded: {LABELS}")
 else:
-    LABELS = ["love", "mother", "thank-you"]
+    LABELS = ["not-found"]
     print("⚠️ ML: Labels not found, using defaults.")
 
+
+
+# ---------------- MODEL RELOAD LOCK ----------------
+
+_reload_lock = threading.Lock()   # запобігає паралельним перезавантаженням
+_model_loading = False            # True поки триває завантаження нової моделі
 
 
 # ---------------- PREDICT ----------------
 
 @router.post("/predict")
 def predict(data: dict = Body(...)):
-
-
+    if _model_loading:
+        raise HTTPException(status_code=503, detail="Model is reloading, please retry")
     if model is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Model is not loaded"
-        )
+        raise HTTPException(status_code=500, detail="Model is not loaded")
 
     try:
         features_list = data.get("features")
@@ -91,12 +95,9 @@ def predict(data: dict = Body(...)):
 
         start_time = time.time()
         prediction = model(input_data, training=False).numpy()
+        inference_ms = round((time.time() - start_time) * 1000, 2)
+        print(f"[predict] inference: {inference_ms} ms")
 
-        end_time = time.time()
-
-        inference_latency = (end_time - start_time) * 1000 # у мілісекундах
-        print(f"DEBUG: Inference took {inference_latency:.2f} ms")
-        
         class_id = int(np.argmax(prediction))
         confidence = float(prediction[0][class_id])
         label_name = LABELS[class_id]
@@ -106,6 +107,7 @@ def predict(data: dict = Body(...)):
             "label": label_name,
             "confidence": confidence,
             "all_scores": all_scores,
+            "inference_ms": inference_ms,
         }
 
     except Exception as e:
@@ -292,12 +294,18 @@ async def predict_ws(websocket: WebSocket):
             if not features:
                 await websocket.send_text(json.dumps({"error": "no features"}))
                 continue
+            if _model_loading:
+                await websocket.send_text(json.dumps({"error": "model_reloading"}))
+                continue
             input_data = np.array(features, dtype=np.float32)
             if input_data.shape != (20, 450):
                 input_data = input_data.reshape(1, 20, 450)
             else:
                 input_data = np.expand_dims(input_data, axis=0)
+            t0 = time.time()
             prediction = model(input_data, training=False).numpy()
+            inference_ms = round((time.time() - t0) * 1000, 2)
+            print(f"[ws/predict] inference: {inference_ms} ms")
             class_id = int(np.argmax(prediction))
             confidence = float(prediction[0][class_id])
             label = LABELS[class_id]
@@ -306,6 +314,7 @@ async def predict_ws(websocket: WebSocket):
                 "label": label,
                 "confidence": confidence,
                 "all_scores": all_scores,
+                "inference_ms": inference_ms,
             }))
     except WebSocketDisconnect:
         pass
@@ -363,8 +372,15 @@ async def gesture_ws(websocket: WebSocket):
                 }))
                 continue
 
+            if _model_loading:
+                await websocket.send_text(json.dumps({"status": "model_reloading", "buffer_size": 20, "lm": lm}))
+                continue
+
             inp = np.expand_dims(_add_delta(frame_buffer), axis=0)
+            t0 = time.time()
             preds = model(inp, training=False).numpy()[0]
+            inference_ms = round((time.time() - t0) * 1000, 2)
+            print(f"[ws/gesture] inference: {inference_ms} ms")
             cls = int(np.argmax(preds))
             conf = float(preds[cls])
             label = LABELS[cls]
@@ -387,6 +403,7 @@ async def gesture_ws(websocket: WebSocket):
                 "confidence": smoothed,
                 "buffer_size": 20,
                 "lm": lm,
+                "inference_ms": inference_ms,
             }))
 
     except WebSocketDisconnect:

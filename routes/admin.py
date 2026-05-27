@@ -37,6 +37,122 @@ def get_stats(admin_id: int = Depends(require_admin), db: Session = Depends(get_
     }
 
 
+@router.get("/model-info")
+def get_model_info(admin_id: int = Depends(require_admin)):
+    import os
+    from routes.ml import model, LABELS, model_path
+
+    model_file = os.path.basename(model_path)
+    model_size_mb = round(os.path.getsize(model_path) / (1024 * 1024), 2) if os.path.exists(model_path) else 0
+
+    param_count = None
+    if model is not None:
+        try:
+            param_count = model.count_params()
+        except Exception:
+            pass
+
+    return {
+        "model_file": model_file,
+        "model_loaded": model is not None,
+        "model_size_mb": model_size_mb,
+        "num_classes": len(LABELS),
+        "classes": LABELS,
+        "window_frames": 20,
+        "features_per_frame": 450,
+        "param_count": param_count,
+    }
+
+
+@router.get("/models")
+def list_models(admin_id: int = Depends(require_admin)):
+    import os, re
+    from routes.ml import MODELS_DIR, model_path
+
+    active_file = os.path.basename(model_path)
+    result = []
+    try:
+        entries = os.listdir(MODELS_DIR)
+    except Exception:
+        return []
+    for f in sorted(entries):
+        if not f.endswith(".keras"):
+            continue
+        full = os.path.join(MODELS_DIR, f)
+        if not os.path.isfile(full):
+            continue
+        size_mb = round(os.path.getsize(full) / (1024 * 1024), 2)
+        m = re.match(r"sign_language_(.+)_model-(\d+)\.keras", f)
+        labels_file = None
+        has_labels = False
+        if m:
+            labels_file = f"gesture_classes_{m.group(1)}-{m.group(2)}.json"
+            has_labels = os.path.exists(os.path.join(MODELS_DIR, labels_file))
+        result.append({
+            "filename": f,
+            "size_mb": size_mb,
+            "labels_file": labels_file,
+            "has_labels": has_labels,
+            "is_active": f == active_file,
+        })
+    return result
+
+
+@router.post("/model-activate")
+def activate_model(body: dict, admin_id: int = Depends(require_admin)):
+    import os, re, json as _json, keras as _keras
+    import routes.ml as ml_module
+
+    filename = (body.get("model_file") or "").strip()
+    if not filename.endswith(".keras"):
+        raise HTTPException(status_code=400, detail="Invalid model filename")
+
+    new_model_path = os.path.join(ml_module.MODELS_DIR, filename)
+    if not os.path.exists(new_model_path):
+        raise HTTPException(status_code=404, detail="Model file not found")
+
+    if not ml_module._reload_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Model reload already in progress")
+
+    try:
+        ml_module._model_loading = True
+        print(f"[admin] Loading model: {filename}")
+
+        new_model = _keras.models.load_model(new_model_path, compile=False)
+
+        m = re.match(r"sign_language_(.+)_model-(\d+)\.keras", filename)
+        new_labels = ml_module.LABELS
+        new_labels_path = ml_module.labels_path
+        if m:
+            lf = f"gesture_classes_{m.group(1)}-{m.group(2)}.json"
+            lp = os.path.join(ml_module.MODELS_DIR, lf)
+            if os.path.exists(lp):
+                with open(lp, "r", encoding="utf-8") as f:
+                    new_labels = _json.load(f)
+                new_labels_path = lp
+
+        ml_module.model = new_model
+        ml_module.LABELS = new_labels
+        ml_module.model_path = new_model_path
+        ml_module.labels_path = new_labels_path
+        print(f"[admin] Model switched to: {filename} ({len(new_labels)} classes)")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load model: {e}")
+    finally:
+        ml_module._model_loading = False
+        ml_module._reload_lock.release()
+
+    return {
+        "ok": True,
+        "model_file": filename,
+        "num_classes": len(new_labels),
+        "labels_found": new_labels_path != ml_module.labels_path or os.path.exists(new_labels_path),
+    }
+
+
 # ---------------- USERS ----------------
 
 @router.get("/users")
