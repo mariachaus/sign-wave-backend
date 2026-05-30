@@ -6,9 +6,9 @@ from sqlalchemy.exc import IntegrityError
 from typing import Optional
 
 from db.connection import get_db
-from db.models import User, Gesture, GestureI18n, GestureSynonym, GestureCategory, LessonGesturesPool, UserGestureStat, UserErrorLog, Lesson, DailyTaskTemplate, Level, LevelI18n, LessonI18n, LessonContent, UserLesson
+from db.models import User, Gesture, GestureI18n, GestureSynonym, GestureCategory, Category, CategoryI18n, LessonGesturesPool, UserGestureStat, UserErrorLog, Lesson, DailyTaskTemplate, Level, LevelI18n, LessonI18n, LessonContent, UserLesson
 from core.dependencies import get_current_user_id
-from schemas import AdminUserUpdate, AdminTemplateCreate, AdminTemplateUpdate, AdminGestureCreate, AdminGestureUpdate, AdminLessonCreate, AdminLessonUpdate, AdminPoolAdd, AdminContentCreate, AdminContentUpdate, AdminLevelCreate, AdminLevelUpdate
+from schemas import AdminUserUpdate, AdminTemplateCreate, AdminTemplateUpdate, AdminGestureCreate, AdminGestureUpdate, AdminLessonCreate, AdminLessonUpdate, AdminPoolAdd, AdminContentCreate, AdminContentUpdate, AdminLevelCreate, AdminLevelUpdate, AdminCategoryCreate, AdminCategoryUpdate
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -865,5 +865,146 @@ def delete_content(
     if not item:
         raise HTTPException(status_code=404, detail="Content not found")
     db.delete(item)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- CATEGORIES ----------------
+
+def _category_row(cat: Category):
+    uk = next((t for t in cat.translations if t.language_code == "uk"), None)
+    en = next((t for t in cat.translations if t.language_code == "en"), None)
+    return {
+        "id": cat.id,
+        "is_active": cat.is_active,
+        "created_at": cat.created_at.strftime("%d %b %Y") if cat.created_at else "—",
+        "name_uk": uk.name if uk else "",
+        "name_en": en.name if en else "",
+        "description_uk": uk.description if uk else "",
+        "description_en": en.description if en else "",
+    }
+
+
+@router.get("/categories")
+def get_categories(
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    cats = db.query(Category).order_by(Category.id).all()
+    return [_category_row(c) for c in cats]
+
+
+@router.post("/categories")
+def create_category(
+    body: AdminCategoryCreate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    cat = Category(is_active=body.is_active)
+    db.add(cat)
+    db.flush()
+    if body.name_uk.strip():
+        db.add(CategoryI18n(category_id=cat.id, language_code="uk", name=body.name_uk.strip(), description=body.description_uk))
+    if body.name_en.strip():
+        db.add(CategoryI18n(category_id=cat.id, language_code="en", name=body.name_en.strip(), description=body.description_en))
+    db.commit()
+    db.refresh(cat)
+    return {"id": cat.id, "ok": True}
+
+
+@router.patch("/categories/{category_id}")
+def update_category(
+    category_id: int,
+    body: AdminCategoryUpdate,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    cat = db.get(Category, category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+    if body.is_active is not None:
+        cat.is_active = body.is_active  # type: ignore
+    for lang, name, desc in [("uk", body.name_uk, body.description_uk), ("en", body.name_en, body.description_en)]:
+        if name is not None:
+            i18n = db.query(CategoryI18n).filter_by(category_id=category_id, language_code=lang).first()
+            if i18n:
+                i18n.name = name  # type: ignore
+                if desc is not None:
+                    i18n.description = desc  # type: ignore
+            else:
+                db.add(CategoryI18n(category_id=category_id, language_code=lang, name=name, description=desc))
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/categories/{category_id}")
+def delete_category(
+    category_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    cat = db.get(Category, category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+    db.query(GestureCategory).filter(GestureCategory.category_id == category_id).delete()
+    db.delete(cat)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- GESTURE CATEGORIES ----------------
+
+@router.get("/gestures/{gesture_id}/categories")
+def get_gesture_categories(
+    gesture_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(GestureCategory, Category, CategoryI18n)
+        .join(Category, GestureCategory.category_id == Category.id)
+        .outerjoin(CategoryI18n, (CategoryI18n.category_id == Category.id) & (CategoryI18n.language_code == "uk"))
+        .filter(GestureCategory.gesture_id == gesture_id)
+        .order_by(GestureCategory.id)
+        .all()
+    )
+    return [{"id": gc.id, "category_id": cat.id, "name": i18n.name if i18n else str(cat.id)} for gc, cat, i18n in rows]
+
+
+@router.post("/gestures/{gesture_id}/categories")
+def add_gesture_category(
+    gesture_id: int,
+    body: dict,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    category_id = body.get("category_id")
+    if not category_id:
+        raise HTTPException(status_code=400, detail="category_id is required")
+    if not db.get(Gesture, gesture_id):
+        raise HTTPException(status_code=404, detail="Gesture not found")
+    if not db.get(Category, category_id):
+        raise HTTPException(status_code=404, detail="Category not found")
+    existing = db.query(GestureCategory).filter_by(gesture_id=gesture_id, category_id=category_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Already assigned")
+    gc = GestureCategory(gesture_id=gesture_id, category_id=category_id)
+    db.add(gc)
+    db.commit()
+    db.refresh(gc)
+    return {"id": gc.id, "category_id": category_id}
+
+
+@router.delete("/gestures/{gesture_id}/categories/{gc_id}")
+def remove_gesture_category(
+    gesture_id: int,
+    gc_id: int,
+    admin_id: int = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    gc = db.query(GestureCategory).filter_by(id=gc_id, gesture_id=gesture_id).first()
+    if not gc:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    db.delete(gc)
     db.commit()
     return {"ok": True}

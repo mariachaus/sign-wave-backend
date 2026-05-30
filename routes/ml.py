@@ -127,7 +127,7 @@ def predict(data: dict = Body(...)):
         class_id = int(np.argmax(prediction))
         confidence = float(prediction[0][class_id])
         label_name = LABELS[class_id]
-        _log_inference("predict", label_name, confidence, inference_ms)
+        # _log_inference("predict", label_name, confidence, inference_ms)
         all_scores = {LABELS[i]: round(float(prediction[0][i]), 4) for i in range(len(LABELS))}
 
         return {
@@ -336,7 +336,7 @@ async def predict_ws(websocket: WebSocket):
             class_id = int(np.argmax(prediction))
             confidence = float(prediction[0][class_id])
             label = LABELS[class_id]
-            _log_inference("ws/predict", label, confidence, inference_ms)
+            # _log_inference("ws/predict", label, confidence, inference_ms)
             all_scores = {LABELS[i]: round(float(prediction[0][i]), 4) for i in range(len(LABELS))}
             await websocket.send_text(json.dumps({
                 "label": label,
@@ -410,7 +410,7 @@ async def gesture_ws(websocket: WebSocket):
             inference_ms = round((time.time() - t0) * 1000, 2)
             print(f"[ws/gesture] inference: {inference_ms} ms")
             cls = int(np.argmax(preds))
-            _log_inference("ws/gesture", LABELS[cls], float(preds[cls]), inference_ms)
+            # _log_inference("ws/gesture", LABELS[cls], float(preds[cls]), inference_ms)
             conf = float(preds[cls])
             label = LABELS[cls]
 

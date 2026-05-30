@@ -233,3 +233,19 @@ class AdminLevelUpdate(BaseModel):
     name_en: Optional[str] = None
     description_uk: Optional[str] = None
     description_en: Optional[str] = None
+
+
+class AdminCategoryCreate(BaseModel):
+    name_uk: str
+    name_en: str = ''
+    description_uk: Optional[str] = None
+    description_en: Optional[str] = None
+    is_active: bool = True
+
+
+class AdminCategoryUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    name_uk: Optional[str] = None
+    name_en: Optional[str] = None
+    description_uk: Optional[str] = None
+    description_en: Optional[str] = None
