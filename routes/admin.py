@@ -1,9 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException
+import os
+import cloudinary
+import cloudinary.uploader
+from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from typing import Optional
+
+load_dotenv()
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+)
 
 from db.connection import get_db
 from db.models import User, Gesture, GestureI18n, GestureSynonym, GestureCategory, Category, CategoryI18n, LessonGesturesPool, UserGestureStat, UserErrorLog, Lesson, DailyTaskTemplate, Level, LevelI18n, LessonI18n, LessonContent, UserLesson
@@ -317,6 +328,29 @@ def create_gesture(
     db.commit()
     db.refresh(gesture)
     return {"id": gesture.id, "ok": True}
+
+
+@router.post("/upload-gesture-image")
+async def upload_gesture_image(
+    file: UploadFile = File(...),
+    image_type: str = Query(..., pattern="^(illustration|thumbnail)$"),
+    gesture_id: int = Query(...),
+    admin_id: int = Depends(require_admin),
+):
+    if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG or WebP images are allowed")
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size must be under 5 MB")
+    folder = "signwave/illustrations" if image_type == "illustration" else "signwave/thumbnails"
+    result = cloudinary.uploader.upload(
+        contents,
+        folder=folder,
+        public_id=f"gesture_{gesture_id}",
+        overwrite=True,
+    )
+    optimized_url = result["secure_url"].replace("/upload/", "/upload/q_auto/f_auto/")
+    return {"url": optimized_url}
 
 
 @router.delete("/gestures/{gesture_id}")
