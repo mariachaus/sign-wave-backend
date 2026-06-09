@@ -45,15 +45,14 @@ if os.path.exists(model_path):
             compile=False
         )
         
-        print("✅ ML: Model loaded successfully!")
 
         mem_after = get_process_memory_mb()
         model_ram_used = mem_after - mem_before
         
         print("✅ ML: Model loaded successfully!")
-        print(f"📊 Пам'ять процесу ДО: {mem_before:.2f} MB")
-        print(f"📊 Пам'ять процесу ПІСЛЯ: {mem_after:.2f} MB")
-        print(f"🔥 Чисте споживання моделі в RAM: {model_ram_used:.2f} MB")
+        print(f"📊 RAM before: {mem_before:.2f} MB")
+        print(f"📊 RAM after:  {mem_after:.2f} MB")
+        print(f"🔥 Model RAM:  {model_ram_used:.2f} MB")
     except Exception as e:
         print(f"❌ ML: Model loading error: {e}")
 else:
