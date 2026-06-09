@@ -297,8 +297,7 @@ def _landmarks_for_drawing(pose_result, hand_result) -> dict:
     return result
 
 
-# Ініціалізуємо при старті сервера (тихо, якщо пакети не встановлені)
-_init_mp_landmarkers()
+# _init_mp_landmarkers()
 
 
 def _process_frame(img_bytes: bytes):
