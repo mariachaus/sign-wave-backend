@@ -158,6 +158,9 @@ def activate_model(body: dict, admin_id: int = Depends(require_admin)):
         ml_module.LABELS = new_labels
         ml_module.model_path = new_model_path
         ml_module.labels_path = new_labels_path
+
+        with open(ml_module._ACTIVE_MODEL_FILE, "w") as f:
+            f.write(filename)
         print(f"[admin] Model switched to: {filename} ({len(new_labels)} classes)")
 
         import pathlib

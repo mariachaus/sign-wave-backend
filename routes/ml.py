@@ -29,7 +29,18 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 
 
-model_path = os.path.join(MODELS_DIR, "sign_language_transformer_model-20.keras")
+_ACTIVE_MODEL_FILE = os.path.join(BASE_DIR, "logs", "active_model.txt")
+
+# Визначаємо який файл моделі завантажувати
+_default_model = "sign_language_transformer_model-20.keras"
+if os.path.exists(_ACTIVE_MODEL_FILE):
+    with open(_ACTIVE_MODEL_FILE, "r") as f:
+        _saved = f.read().strip()
+    _chosen = _saved if (_saved and os.path.exists(os.path.join(MODELS_DIR, _saved))) else _default_model
+else:
+    _chosen = _default_model
+
+model_path = os.path.join(MODELS_DIR, _chosen)
 
 model: Any = None
 
@@ -63,7 +74,16 @@ else:
 
 LABELS = []
 
-labels_path = os.path.join(MODELS_DIR, "gesture_classes_gru_attention-20.json")
+import re as _re
+_m = _re.match(r"sign_language_(.+)_model-(\d+)\.keras", _chosen)
+if _m:
+    _lf = f"gesture_classes_{_m.group(1)}-{_m.group(2)}.json"
+    labels_path = os.path.join(MODELS_DIR, _lf)
+    if not os.path.exists(labels_path):
+        labels_path = os.path.join(MODELS_DIR, "gesture_classes_transformer-20.json")
+else:
+    labels_path = os.path.join(MODELS_DIR, "gesture_classes_transformer-20.json")
+
 
 if os.path.exists(labels_path):
     with open(labels_path, "r", encoding="utf-8") as f:
