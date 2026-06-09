@@ -97,29 +97,39 @@ else:
 
 # ---------------- MODEL RELOAD LOCK ----------------
 
-_reload_lock = threading.Lock()   # запобігає паралельним перезавантаженням
-_model_loading = False            # True поки триває завантаження нової моделі
+_reload_lock = threading.Lock()   
+_model_loading = False            
 
 
 # ---------------- INFERENCE LOGGING ----------------
-
 _INFERENCE_LOG = os.path.join(BASE_DIR, "logs", "inference_log.csv")
-_CSV_HEADER = ["timestamp", "endpoint", "label", "confidence", "inference_ms", "ram_mb", "model"]
 
-def _log_inference(endpoint: str, label: str, confidence: float, inference_ms: float) -> None:
+_CSV_HEADER = [
+    "timestamp", "endpoint", "label", "confidence", "inference_ms", 
+    "ram_before_mb", "ram_after_mb", "model_ram_mb", "model"
+]
+
+def _log_inference(endpoint: str, label: str, confidence: float, inference_ms: float, 
+                   ram_before: float = 0.0, ram_after: float = 0.0, model_ram: float = 0.0) -> None:
     try:
+
         write_header = not os.path.exists(_INFERENCE_LOG)
+        
+
         with open(_INFERENCE_LOG, "a", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             if write_header:
                 w.writerow(_CSV_HEADER)
+            
             w.writerow([
                 datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                 endpoint,
                 label,
                 round(confidence, 4),
                 inference_ms,
-                round(get_process_memory_mb(), 1),  # ← додали
+                round(ram_before, 1),  
+                round(ram_after, 1),   
+                round(model_ram, 1),   
                 os.path.basename(model_path),
             ])
     except Exception:
