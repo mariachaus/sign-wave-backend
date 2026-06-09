@@ -1,6 +1,6 @@
 import os
-import cloudinary
-import cloudinary.uploader
+import cloudinary # type: ignore
+import cloudinary.uploader # type: ignore
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query
 from sqlalchemy.orm import Session
@@ -113,6 +113,7 @@ def list_models(admin_id: int = Depends(require_admin)):
 def activate_model(body: dict, admin_id: int = Depends(require_admin)):
     import os, re, json as _json, keras as _keras
     import routes.ml as ml_module
+    import gc
 
     filename = (body.get("model_file") or "").strip()
     if not filename.endswith(".keras"):
@@ -127,6 +128,17 @@ def activate_model(body: dict, admin_id: int = Depends(require_admin)):
 
     try:
         ml_module._model_loading = True
+
+        # === MEMORY CLEANUP BEFORE LOADING ===
+        print(f"[admin] Clearing memory from previous model...")
+        if ml_module.model is not None:
+            del ml_module.model 
+            ml_module.model = None
+        
+        _keras.backend.clear_session()  
+        gc.collect()  
+        # =============================================================
+
         print(f"[admin] Loading model: {filename}")
 
         new_model = _keras.models.load_model(new_model_path, compile=False)
@@ -911,7 +923,7 @@ def _category_row(cat: Category):
     return {
         "id": cat.id,
         "is_active": cat.is_active,
-        "created_at": cat.created_at.strftime("%d %b %Y") if cat.created_at else "—",
+        "created_at": cat.created_at.strftime("%d %b %Y") if cat.created_at else "—", # type: ignore
         "name_uk": uk.name if uk else "",
         "name_en": en.name if en else "",
         "description_uk": uk.description if uk else "",
