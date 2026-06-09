@@ -160,6 +160,9 @@ def activate_model(body: dict, admin_id: int = Depends(require_admin)):
         ml_module.labels_path = new_labels_path
         print(f"[admin] Model switched to: {filename} ({len(new_labels)} classes)")
 
+        import pathlib
+        pathlib.Path("reload.trigger").touch()
+
     except HTTPException:
         raise
     except Exception as e:
