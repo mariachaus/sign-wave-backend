@@ -769,15 +769,25 @@ def complete_lesson(
     except Exception as e:
         print(f"[daily-tasks] update failed after lesson: {e}")
 
-    # 6. Gesture stats для помилок
-    if payload.errors:
-        try:
+
+    # 6. Оновлення статистики жестів (успіхи та помилки)
+    try:
+        # Спочатку фіксуємо успішні спроби (це збільшить інтервали для алгоритму)
+        if hasattr(payload, 'correct_gesture_ids') and payload.correct_gesture_ids:
+            # Використовуємо set(), щоб уникнути дублювання, якщо один жест зустрічався двічі
+            unique_correct_ids = set(payload.correct_gesture_ids)
+            for gid in unique_correct_ids:
+                update_gesture_stat(user_id, gid, correct=True, db=db)
+
+        # Потім фіксуємо помилки (це зменшить або скине прогрес жесту)
+        if payload.errors:
             for err in payload.errors:
                 update_gesture_stat(user_id, err.gesture_id, correct=False, db=db)
-            db.commit()
-        except Exception as e:
-            print(f"[gesture-stat] update failed after lesson: {e}")
-            db.rollback()
+                
+        db.commit()
+    except Exception as e:
+        print(f"[gesture-stat] update failed after lesson: {e}")
+        db.rollback()
 
     new_achievements = []
     try:

@@ -131,6 +131,7 @@ class LessonCompleteRequest(BaseModel):
     score: int
     errors: list[ErrorDetail] = []
     hearts_remaining: int = 0
+    correct_gesture_ids: list[int] = []
 
 
 # --- ADMIN ---
