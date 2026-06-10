@@ -251,7 +251,7 @@ def practice_gesture(
             seen.add(g.id)
             all_pool.append(_g_local(g, g_i))
 
-    if len(all_pool) < 10:
+    if len(all_pool) < 4:
         fill_raw = db.query(Gesture, GestureI18n)\
             .join(GestureI18n, Gesture.id == GestureI18n.gesture_id)\
             .filter(Gesture.id.notin_(seen), GestureI18n.language_code == lang)\
@@ -387,7 +387,7 @@ def random_lesson(
     all_pool = [_g(g, gi) for g, gi in pool_raw]
 
     # Добираємо до мін 10 якщо вивчених мало
-    if len(all_pool) < 10:
+    if len(all_pool) < 4:
         fill_raw = db.query(Gesture, GestureI18n)\
             .join(GestureI18n, Gesture.id == GestureI18n.gesture_id)\
             .filter(
@@ -517,7 +517,7 @@ def start_lesson(
             all_pool.append(_g(g, gi))
 
     # Якщо менше 10 — добираємо будь-які жести для варіантів квізу
-    if len(all_pool) < 10:
+    if len(all_pool) < 4:
         fill_raw = (
             db.query(Gesture, GestureI18n)
               .join(GestureI18n, Gesture.id == GestureI18n.gesture_id)
