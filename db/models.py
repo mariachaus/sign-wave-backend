@@ -78,12 +78,10 @@ class UserStreak(Base):
 
 # --- СЕКЦІЯ НАВЧАЛЬНОГО КОНТЕНТУ ---
 
-# Рівень (наприклад, "Початківець", "Середній")
 class Level(Base):
     __tablename__ = "levels"
     id = Column(Integer, primary_key=True)
     is_active = Column(Boolean, default=True)
-    # Зв'язок з перекладами назв (як ми робили для жестів)
     translations = relationship("LevelI18n", backref="level")
     lessons = relationship("Lesson", backref="level")
 
@@ -98,7 +96,6 @@ class LevelI18n(Base):
 
     __table_args__ = (UniqueConstraint('level_id', 'language_code'),)
 
-# Урок (наприклад, "Вітання частина 1")
 class Lesson(Base):
     __tablename__ = "lessons"
     id = Column(Integer, primary_key=True)
@@ -108,7 +105,6 @@ class Lesson(Base):
     is_active = Column(Boolean, default=True)
     
     translations = relationship("LessonI18n", backref="lesson")
-    
 
 
 class LessonI18n(Base):
@@ -141,7 +137,6 @@ class Category(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Зв'язок з перекладами
     translations = relationship("CategoryI18n", backref="category", cascade="all, delete-orphan")
 
 class CategoryI18n(Base):
@@ -222,7 +217,6 @@ class LessonGesturesPool(Base):
 
 # --- СЕКЦІЯ ПРОГРЕСУ ---
 
-# Прогрес користувача (що пройдено)
 
 class UserGestureStat(Base):
     __tablename__ = "user_gesture_stats"
@@ -344,3 +338,17 @@ class PasswordResetToken(Base):
     token = Column(String(64), unique=True, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Friendship(Base):
+    __tablename__ = "friendships"
+
+    id = Column(Integer, primary_key=True)
+    requester_id = Column(Integer, ForeignKey('users.id', ondelete="CASCADE"), nullable=False)
+    addressee_id = Column(Integer, ForeignKey('users.id', ondelete="CASCADE"), nullable=False)
+    status = Column(String(20), nullable=False, default='pending')  # pending | accepted
+    created_at = Column(DateTime, default=datetime.utcnow)
+    responded_at = Column(DateTime)
+
+    requester = relationship("User", foreign_keys=[requester_id])
+    addressee = relationship("User", foreign_keys=[addressee_id])

@@ -16,6 +16,8 @@ from routes.lesson import router as lessons_router
 from routes.daily import router as daily_router
 from routes.admin import router as admin_router
 from routes.flashcards import router as flashcards_router
+from routes.friends import router as friends_router
+
 
 import os
 import logging
@@ -92,6 +94,7 @@ app.include_router(lessons_router, prefix="/api")
 app.include_router(daily_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(flashcards_router, prefix="/api")
+app.include_router(friends_router, prefix="/api/friends")
 
 
 # ---------------- ROOT ----------------

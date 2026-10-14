@@ -79,7 +79,7 @@ class UserStats(BaseModel):
     total_xp: int
     lessons_completed: int
     current_streak: int
-    top_gestures: list[str] # Назви жестів, які юзер знає найкраще
+    top_gestures: list[str] 
 
 # --- STEP GESTURE (shared shape for all exercise types) ---
 
@@ -250,3 +250,48 @@ class AdminCategoryUpdate(BaseModel):
     name_en: Optional[str] = None
     description_uk: Optional[str] = None
     description_en: Optional[str] = None
+
+
+# --- FRIENDS ---
+
+class FriendUser(BaseModel):
+    id: int
+    username: str
+    avatar_url: Optional[str] = None
+    total_xp: int = 0
+    current_streak: int = 0
+
+
+class FriendshipOut(BaseModel):
+    friendship_id: int
+    user: FriendUser          
+    created_at: datetime
+
+
+class FriendRequestsResponse(BaseModel):
+    incoming: List[FriendshipOut]
+    outgoing: List[FriendshipOut]
+
+
+class UserSearchResult(BaseModel):
+    id: int
+    username: str
+    avatar_url: Optional[str] = None
+    total_xp: int = 0
+    # none | pending_outgoing | pending_incoming | friends
+    friendship_status: str = "none"
+    friendship_id: Optional[int] = None
+
+
+class PublicProfileResponse(BaseModel):
+    id: int
+    username: str
+    avatar_url: Optional[str] = None
+    total_xp: int = 0
+    current_streak: int = 0
+    gestures_mastered: int = 0     # mastery_level = 3
+    achievements_count: int = 0
+    member_since: datetime
+    # self | none | pending_outgoing | pending_incoming | friends
+    friendship_status: str = "none"
+    friendship_id: Optional[int] = None
