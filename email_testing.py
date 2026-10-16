@@ -1,4 +1,3 @@
-"""Запусти: python test_email.py"""
 from email_service import send_test_email
 from database_connection import SessionLocal
 from database import User, UserSetting

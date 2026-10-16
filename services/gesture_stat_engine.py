@@ -36,11 +36,11 @@ def update_gesture_stat(user_id: int, gesture_id: int, correct: bool, db: Sessio
 
     stat.last_attempt_at = now  # type: ignore
 
-    correct_count = int(stat.correct_count or 0)
-    error_count = int(stat.error_count or 0)
+    correct_count = int(stat.correct_count or 0) # type: ignore
+    error_count = int(stat.error_count or 0) # type: ignore
     ef = _ease_factor(correct_count, correct_count + error_count)
 
-    current_stage = int(stat.mastery_level or 0)
+    current_stage = int(stat.mastery_level or 0) # type: ignore
 
     if correct:
         new_stage = min(3, current_stage + 1)
