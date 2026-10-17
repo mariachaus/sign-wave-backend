@@ -7,6 +7,8 @@ from db.connection import SessionLocal
 from db.models import User, UserSetting, UserStreak, UserXPLog, UserLesson
 from services.email_service import send_streak_reminder, send_weekly_summary
 
+from services.streak_utils import effective_streak_length
+
 logger = logging.getLogger("signwave")
 scheduler = BackgroundScheduler()
 
@@ -29,10 +31,13 @@ def _send_streak_reminders() -> None:
         )
         sent = 0
         for user, settings, streak in rows:
+            live_length = effective_streak_length(streak)
+            if live_length <= 0:
+                continue  
             last = streak.last_activity_at
             if last is None or last.date() < today:
                 try:
-                    send_streak_reminder(user.email, user.username, streak.streak_length, lang=settings.language if settings else "uk")
+                    send_streak_reminder(user.email, user.username, live_length, lang=settings.language if settings else "uk")
                     sent += 1
                 except Exception as e:
                     logger.error(f"streak reminder failed for {user.email}: {e}")
@@ -80,7 +85,7 @@ def _send_weekly_summaries() -> None:
                     .filter(UserStreak.user_id == user.id, UserStreak.is_current == True)
                     .first()
                 )
-                current_streak = streak.streak_length if streak else 0
+                current_streak = effective_streak_length(streak)
 
                 if total_xp > 0 or lessons_this_week > 0:
                     send_weekly_summary(
