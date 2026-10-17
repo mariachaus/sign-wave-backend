@@ -22,6 +22,7 @@ from schemas import (
     PublicProfileResponse,
     UserSearchResult,
 )
+from services.streak_utils import effective_streak_length
 
 router = APIRouter(tags=["Friends"])
 
@@ -63,11 +64,11 @@ def _streaks_map(db: Session, user_ids: List[int]) -> dict:
     if not user_ids:
         return {}
     rows = (
-        db.query(UserStreak.user_id, UserStreak.streak_length)
+        db.query(UserStreak)
         .filter(UserStreak.user_id.in_(user_ids), UserStreak.is_current == True)
         .all()
     )
-    return {uid: (length or 0) for uid, length in rows}
+    return {s.user_id: effective_streak_length(s) for s in rows}
 
 
 def _friend_user(user: User, streaks: dict) -> FriendUser:
@@ -231,11 +232,11 @@ def get_public_profile(
         or 0
     )
     streak_row = (
-        db.query(UserStreak.streak_length)
+        db.query(UserStreak)
         .filter(UserStreak.user_id == target_id, UserStreak.is_current == True)
         .first()
     )
-    current_streak = (streak_row[0] or 0) if streak_row else 0
+    current_streak = effective_streak_length(streak_row)
 
     if target_id == user_id:
         status, friendship_id = "self", None
