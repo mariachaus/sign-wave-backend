@@ -5,6 +5,7 @@ from sqlalchemy import func
 import cloudinary
 import cloudinary.uploader
 import os
+from services.streak_utils import effective_streak_length
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -79,13 +80,18 @@ def get_profile(
             for ach, earned_at in achievements_query
         ]
 
+        current_streak_row = db.query(UserStreak).filter(
+            UserStreak.user_id == user_id,
+            UserStreak.is_current == True,
+        ).first()
+
         return {
             "username": user.username,
             "joined_at": user.created_at.strftime("%d %B %Y") if user.created_at else "Unknown", # type: ignore
             "total_xp": user.total_xp,
             "avatar_url": user.avatar_url,
             "role": user.role,
-            "current_streak": user.streak.streak_length if user.streak else 0,
+            "current_streak": effective_streak_length(current_streak_row),
             "longest_streak": db.query(func.max(UserStreak.streak_length)).filter(
                 UserStreak.user_id == user_id
             ).scalar() or 0,
@@ -179,7 +185,7 @@ def get_streak(
     if not streak:
         return {"current_streak": 0, "longest_streak": 0, "freeze_shields": 0}
 
-    current = streak.streak_length or 0
+    current = effective_streak_length(streak)
     longest = db.query(func.max(UserStreak.streak_length)).filter(
         UserStreak.user_id == user_id
     ).scalar() or 0
@@ -226,12 +232,12 @@ def get_streak_calendar(
         periods.append({
             "started_at": s.started_at.isoformat(),
             "ended_at": end_iso,
-            "is_current": bool(s.is_current),
+            "is_current": bool(s.is_current) and effective_streak_length(s) > 0,
             "streak_length": s.streak_length or 0,
         })
 
     return {
         "streak_periods": periods,
-        "current_streak": current_row.streak_length if current_row else 0,
+        "current_streak": effective_streak_length(current_row),
         "longest_streak": longest,
     }
