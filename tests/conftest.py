@@ -16,5 +16,6 @@ for _mod in [
     "routes.daily",
     "services.achievement_engine",
     "core.dependencies",
+    "keras",
 ]:
     sys.modules.setdefault(_mod, MagicMock())
