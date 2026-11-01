@@ -1,6 +1,26 @@
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field, AfterValidator
+from typing import Optional, List, Annotated
 from datetime import datetime
+
+
+# --- PASSWORD ---
+
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 100
+
+def validate_password(value: str) -> str:
+    if not any(c.isalpha() for c in value):
+        raise ValueError("Password must contain at least one letter")
+    if not any(c.isdigit() for c in value):
+        raise ValueError("Password must contain at least one digit")
+    return value
+
+# Shared rules for every endpoint that sets a new password
+Password = Annotated[
+    str,
+    Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH),
+    AfterValidator(validate_password),
+]
 
 
 # --- AUTH ---
@@ -8,7 +28,7 @@ from datetime import datetime
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=30)
     email: EmailStr
-    password: str = Field(min_length=8, max_length=100)
+    password: Password
 
 class LoginRequest(BaseModel):
     username: str
@@ -22,7 +42,11 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str = Field(min_length=8, max_length=100)
+    new_password: Password
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: Password
 
 
 # --- USER BASE ---
