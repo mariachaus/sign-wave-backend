@@ -6,7 +6,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from core.dependencies import get_current_user_id
+from core.dependencies import get_verified_user_id
 from db.connection import get_db
 from db.models import (
     Friendship,
@@ -105,7 +105,7 @@ def _friendship_query(db: Session):
 
 @router.get("", response_model=List[FriendshipOut])
 def list_friends(
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_verified_user_id),
     db: Session = Depends(get_db),
 ):
     rows = (
@@ -124,7 +124,7 @@ def list_friends(
 
 @router.get("/requests", response_model=FriendRequestsResponse)
 def list_requests(
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_verified_user_id),
     db: Session = Depends(get_db),
 ):
     incoming = (
@@ -150,7 +150,7 @@ def list_requests(
 @router.get("/search", response_model=List[UserSearchResult])
 def search_users(
     q: str = Query(..., min_length=2, max_length=30),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_verified_user_id),
     db: Session = Depends(get_db),
 ):
     term = q.strip()
@@ -163,6 +163,8 @@ def search_users(
         .filter(
             User.id != user_id,
             User.is_active == True,
+            # без підтвердженої пошти користувач не має доступу до друзів, тож не показуємо його
+            User.is_email_verified == True,
             User.username.ilike(f"%{_escape_like(term)}%", escape="\\"),
         )
         .order_by(func.lower(User.username), User.id)
@@ -209,7 +211,7 @@ def search_users(
 @router.get("/profile/{target_id}", response_model=PublicProfileResponse)
 def get_public_profile(
     target_id: int,
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_verified_user_id),
     db: Session = Depends(get_db),
 ):
     user: Any = db.get(User, target_id)
@@ -264,14 +266,14 @@ def get_public_profile(
 @router.post("/request/{target_id}")
 def send_request(
     target_id: int,
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_verified_user_id),
     db: Session = Depends(get_db),
 ):
     if target_id == user_id:
         raise HTTPException(status_code=400, detail="You cannot add yourself")
 
     target: Any = db.get(User, target_id)
-    if not target or not target.is_active:
+    if not target or not target.is_active or not target.is_email_verified:
         raise HTTPException(status_code=404, detail="User not found")
 
     existing = _find_friendship(db, user_id, target_id)
@@ -316,7 +318,7 @@ def send_request(
 @router.post("/{friendship_id}/accept")
 def accept_request(
     friendship_id: int,
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_verified_user_id),
     db: Session = Depends(get_db),
 ):
     f: Any = db.get(Friendship, friendship_id)
@@ -338,7 +340,7 @@ def accept_request(
 @router.delete("/{friendship_id}")
 def delete_friendship(
     friendship_id: int,
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_verified_user_id),
     db: Session = Depends(get_db),
 ):
     f: Any = db.get(Friendship, friendship_id)

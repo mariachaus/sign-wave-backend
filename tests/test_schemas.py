@@ -7,6 +7,7 @@ from schemas import (
     LoginRequest,
     ErrorDetail,
     ResetPasswordRequest,
+    ChangePasswordRequest,
     LessonCompleteRequest,
 )
 
@@ -28,6 +29,22 @@ class TestRegisterRequest:
     def test_password_too_short_rejected(self):
         with pytest.raises(ValidationError):
             RegisterRequest(username="alice", email="a@b.com", password="short")
+
+    def test_password_too_long_rejected(self):
+        with pytest.raises(ValidationError):
+            RegisterRequest(username="alice", email="a@b.com", password="a1" * 51)
+
+    def test_password_without_digit_rejected(self):
+        with pytest.raises(ValidationError, match="digit"):
+            RegisterRequest(username="alice", email="a@b.com", password="onlyletters")
+
+    def test_password_without_letter_rejected(self):
+        with pytest.raises(ValidationError, match="letter"):
+            RegisterRequest(username="alice", email="a@b.com", password="12345678")
+
+    def test_cyrillic_letters_accepted(self):
+        r = RegisterRequest(username="alice", email="a@b.com", password="пароль123")
+        assert r.password == "пароль123"
 
 
 class TestLoginRequest:
@@ -59,12 +76,35 @@ class TestErrorDetail:
 
 class TestResetPasswordRequest:
     def test_valid_data_accepted(self):
-        r = ResetPasswordRequest(token="abc123", new_password="newpassword")
+        r = ResetPasswordRequest(token="abc123", new_password="newpass123")
         assert r.token == "abc123"
 
     def test_short_password_rejected(self):
         with pytest.raises(ValidationError):
             ResetPasswordRequest(token="abc123", new_password="short")
+
+    def test_password_without_digit_rejected(self):
+        with pytest.raises(ValidationError):
+            ResetPasswordRequest(token="abc123", new_password="newpassword")
+
+
+class TestChangePasswordRequest:
+    def test_valid_data_accepted(self):
+        r = ChangePasswordRequest(old_password="anything", new_password="newpass123")
+        assert r.new_password == "newpass123"
+
+    def test_old_password_not_validated(self):
+        # old passwords created before the rules were introduced must still be accepted
+        r = ChangePasswordRequest(old_password="old", new_password="newpass123")
+        assert r.old_password == "old"
+
+    def test_weak_new_password_rejected(self):
+        with pytest.raises(ValidationError):
+            ChangePasswordRequest(old_password="anything", new_password="12345678")
+
+    def test_empty_new_password_rejected(self):
+        with pytest.raises(ValidationError):
+            ChangePasswordRequest(old_password="anything", new_password="")
 
 
 class TestLessonCompleteRequest:

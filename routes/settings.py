@@ -7,6 +7,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from db.connection import get_db
 from db.models import User, UserSetting
 from core.dependencies import get_current_user_id
+from schemas import ChangePasswordRequest
 
 router = APIRouter(tags=["Settings"])
 
@@ -124,15 +125,15 @@ def update_profile(
 
 @router.put("/change-password")
 def change_password(
-    data: dict,
+    data: ChangePasswordRequest,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
 
     user = db.query(User).get(user_id)
 
-    old_pw = data.get("old_password") or ""
-    new_pw = data.get("new_password") or ""
+    old_pw = data.old_password
+    new_pw = data.new_password
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

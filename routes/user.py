@@ -87,6 +87,8 @@ def get_profile(
 
         return {
             "username": user.username,
+            "email": user.email,
+            "is_email_verified": user.is_email_verified,
             "joined_at": user.created_at.strftime("%d %B %Y") if user.created_at else "Unknown", # type: ignore
             "total_xp": user.total_xp,
             "avatar_url": user.avatar_url,

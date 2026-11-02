@@ -1,4 +1,5 @@
 import secrets
+import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,16 +9,43 @@ import requests as http_requests
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from db.connection import get_db
-from db.models import User, UserSetting, UserStreak, UserAchievement, Achievement, PasswordResetToken
-from services.email_service import send_password_reset
+from db.models import (
+    User, UserSetting, UserStreak, UserAchievement, Achievement,
+    PasswordResetToken, EmailVerificationToken,
+)
+from services.email_service import send_password_reset, send_email_verification
 
+from core.dependencies import get_current_user_id
 from services.auth_utils import create_access_token
-from schemas import RegisterRequest, LoginRequest, GoogleLoginRequest, ForgotPasswordRequest, ResetPasswordRequest
+from schemas import (
+    RegisterRequest, LoginRequest, GoogleLoginRequest, ForgotPasswordRequest,
+    ResetPasswordRequest, VerifyEmailRequest,
+)
 
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 _RESET_TOKEN_TTL_HOURS = 1
+_VERIFY_TOKEN_TTL_HOURS = 24
+_VERIFY_RESEND_COOLDOWN_SECONDS = 60
+
+logger = logging.getLogger("signwave")
 
 router = APIRouter(tags=["Auth"])
+
+
+def _send_verification_email(db: Session, user: User) -> None:
+    """Replaces any previous verification token of the user and emails a new link."""
+    db.query(EmailVerificationToken).filter_by(user_id=user.id).delete()
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=_VERIFY_TOKEN_TTL_HOURS)
+    db.add(EmailVerificationToken(user_id=user.id, token=token, expires_at=expires_at))
+    db.commit()
+
+    lang = user.settings.language if user.settings else "uk"
+    try:
+        send_email_verification(user.email, user.username, token, lang=lang)  # type: ignore
+    except Exception as e:
+        logger.error(f"verification email failed for {user.email}: {e}")
 
 
 # ---------------- REGISTER ----------------
@@ -73,16 +101,18 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 
         db.commit()
 
-        return {
-            "message": "Registration successful. 'First Wave' achievement granted."
-        }
-
     except Exception as e:
         db.rollback()
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
+
+    _send_verification_email(db, new_user)
+
+    return {
+        "message": "Registration successful. Please check your email to confirm your address."
+    }
 
 
 # ---------------- LOGIN ----------------
@@ -135,6 +165,9 @@ def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
     if not google_id or not email:
         raise HTTPException(status_code=400, detail="Google account missing required fields")
 
+    if info.get("email_verified") is not True:
+        raise HTTPException(status_code=400, detail="Google account email is not verified")
+
     # Find or create user
     user = db.query(User).filter(User.google_id == google_id).first()
 
@@ -144,6 +177,7 @@ def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
         if user:
             # Link Google ID to existing account
             user.google_id = google_id  # type: ignore
+            user.is_email_verified = True  # type: ignore
             if not user.avatar_url:
                 user.avatar_url = avatar_url  # type: ignore
         else:
@@ -161,6 +195,7 @@ def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
                 email=email,
                 google_id=google_id,
                 avatar_url=avatar_url,
+                is_email_verified=True,
                 total_xp=0
             )
             db.add(user)
@@ -234,7 +269,56 @@ def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid or expired token")
 
     user.password_hash = generate_password_hash(data.new_password)  # type: ignore
+    # The reset link was delivered to this email, so the user owns it
+    user.is_email_verified = True  # type: ignore
     db.delete(reset_token)
     db.commit()
 
     return {"message": "Password updated successfully"}
+
+
+# ---------------- VERIFY EMAIL ----------------
+
+@router.post("/verify-email")
+def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
+    verify_token = db.query(EmailVerificationToken).filter_by(token=data.token).first()
+
+    if not verify_token or verify_token.expires_at < datetime.utcnow():
+        if verify_token:
+            db.delete(verify_token)
+            db.commit()
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user = db.query(User).filter_by(id=verify_token.user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user.is_email_verified = True  # type: ignore
+    db.delete(verify_token)
+    db.commit()
+
+    return {"message": "Email verified successfully"}
+
+
+# ---------------- RESEND VERIFICATION ----------------
+
+@router.post("/resend-verification")
+def resend_verification(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    user = db.query(User).filter_by(id=user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.is_email_verified:
+        raise HTTPException(status_code=400, detail="Email is already verified")
+
+    last_token = db.query(EmailVerificationToken).filter_by(user_id=user.id).first()
+    cooldown = timedelta(seconds=_VERIFY_RESEND_COOLDOWN_SECONDS)
+    if last_token and last_token.created_at and datetime.utcnow() - last_token.created_at < cooldown:
+        raise HTTPException(status_code=429, detail="Please wait a minute before requesting another email")
+
+    _send_verification_email(db, user)
+
+    return {"message": "Verification email sent"}

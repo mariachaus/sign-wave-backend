@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from db.connection import engine, SessionLocal
 from db.models import Base
+from db.migrations import run_migrations
 
 # routes
 from routes.ml import router as ml_router
@@ -81,6 +82,7 @@ app.add_middleware(
 # ---------------- DB INIT ----------------
 
 Base.metadata.create_all(bind=engine)
+run_migrations(engine)
 
 
 # ---------------- ROUTERS ----------------
