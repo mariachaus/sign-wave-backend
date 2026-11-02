@@ -1,5 +1,6 @@
 import smtplib
 import os
+import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
@@ -11,6 +12,8 @@ MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
 MAIL_SERVER   = os.getenv("MAIL_SERVER", "smtp.gmail.com")
 MAIL_PORT     = int(os.getenv("MAIL_PORT", "587"))
 APP_URL       = os.getenv("APP_URL", "http://localhost:5173")
+
+logger = logging.getLogger("signwave")
 
 # ── Translations ──────────────────────────────────────────────────────────────
 
@@ -40,6 +43,12 @@ _T = {
         "reset_body":         "Ми отримали запит на відновлення паролю для твого акаунту.",
         "reset_btn":          "Відновити пароль →",
         "reset_note":         "Посилання дійсне 1 годину. Якщо ти не надсилав(ла) цей запит — просто проігноруй цей лист.",
+
+        "verify_subject":     "✉️ Підтвердь свою пошту в SignWave",
+        "verify_heading":     "Вітаємо у SignWave, {username}!",
+        "verify_body":        "Підтвердь, будь ласка, що ця адреса належить тобі.",
+        "verify_btn":         "Підтвердити пошту →",
+        "verify_note":        "Посилання дійсне 24 години. Якщо ти не реєструвався(лась) у SignWave — просто проігноруй цей лист.",
     },
     "en": {
         "unsubscribe":        "Unsubscribe",
@@ -66,6 +75,12 @@ _T = {
         "reset_body":         "We received a request to reset the password for your account.",
         "reset_btn":          "Reset password →",
         "reset_note":         "This link is valid for 1 hour. If you didn't request this — just ignore this email.",
+
+        "verify_subject":     "✉️ Confirm your email for SignWave",
+        "verify_heading":     "Welcome to SignWave, {username}!",
+        "verify_body":        "Please confirm that this email address belongs to you.",
+        "verify_btn":         "Confirm email →",
+        "verify_note":        "This link is valid for 24 hours. If you didn't sign up for SignWave — just ignore this email.",
     },
 }
 
@@ -185,6 +200,27 @@ def send_password_reset(to: str, username: str, token: str, lang: str = "uk") ->
       <p style="font-size:13px;color:#888;margin:20px 0 0;">{_tr(lang, "reset_note")}</p>
     """
     _send(to, _tr(lang, "reset_subject"), _base_template(lang, content))
+
+
+def send_email_verification(to: str, username: str, token: str, lang: str = "uk") -> None:
+    verify_url = f"{APP_URL}/verify-email?token={token}"
+
+    if not MAIL_FROM or not MAIL_PASSWORD:
+        logger.warning(f"MAIL_* not configured, email not sent. Verification link for {to}: {verify_url}")
+        return
+
+    content = f"""
+      <h2 style="margin:0 0 12px;">{_tr(lang, "verify_heading", username=username)}</h2>
+      <p style="font-size:16px;margin:0 0 20px;">{_tr(lang, "verify_body")}</p>
+      <a href="{verify_url}" style="
+        display:inline-block;background:#7c3aed;color:#fff;
+        padding:12px 28px;border-radius:8px;text-decoration:none;
+        font-weight:600;font-size:15px;">
+        {_tr(lang, "verify_btn")}
+      </a>
+      <p style="font-size:13px;color:#888;margin:20px 0 0;">{_tr(lang, "verify_note")}</p>
+    """
+    _send(to, _tr(lang, "verify_subject"), _base_template(lang, content))
 
 
 def send_test_email(to: str, username: str = "User", lang: str = "uk") -> None:

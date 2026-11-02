@@ -48,6 +48,9 @@ class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: Password
 
+class VerifyEmailRequest(BaseModel):
+    token: str
+
 
 # --- USER BASE ---
 
