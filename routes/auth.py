@@ -60,8 +60,8 @@ def register(data: RegisterRequest, request: Request, db: Session = Depends(get_
 
     ip = rate_limiter.client_ip(request)
     account = rate_limiter.normalize_account(email)
-    rate_limiter.check(db, "register", ip, account)
-    rate_limiter.record(db, "register", ip, account, success=False)
+    # every registration request counts as an attempt (limits sign-up spam), successful or not
+    rate_limiter.begin(db, "register", ip, account)
 
     # 1. Check if user exists
     existing_user = db.query(User).filter(
@@ -131,18 +131,17 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
     ip = rate_limiter.client_ip(request)
     account = rate_limiter.normalize_account(username)
-    rate_limiter.check(db, "login", ip, account)
+    attempt = rate_limiter.begin(db, "login", ip, account)
 
     user = db.query(User).filter(User.username == username).first()
 
     if not user or not check_password_hash(str(user.password_hash), password):
-        rate_limiter.record(db, "login", ip, account, success=False)
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password"
         )
 
-    rate_limiter.record(db, "login", ip, account, success=True)
+    rate_limiter.succeed(db, attempt)
 
     # тимчасовий токен (без external libs)
     access_token = create_access_token(user.id) # type: ignore
@@ -162,7 +161,7 @@ def google_login(data: GoogleLoginRequest, request: Request, db: Session = Depen
     access_token = data.access_token
 
     ip = rate_limiter.client_ip(request)
-    rate_limiter.check(db, "google", ip, None)
+    attempt = rate_limiter.begin(db, "google", ip, None)
 
     # Get user info from Google
     resp = http_requests.get(
@@ -170,7 +169,6 @@ def google_login(data: GoogleLoginRequest, request: Request, db: Session = Depen
         headers={"Authorization": f"Bearer {access_token}"}
     )
     if resp.status_code != 200:
-        rate_limiter.record(db, "google", ip, None, success=False)
         raise HTTPException(status_code=401, detail="Invalid Google token")
 
     info = resp.json()
@@ -184,6 +182,8 @@ def google_login(data: GoogleLoginRequest, request: Request, db: Session = Depen
 
     if info.get("email_verified") is not True:
         raise HTTPException(status_code=400, detail="Google account email is not verified")
+
+    rate_limiter.succeed(db, attempt)
 
     # Find or create user
     user = db.query(User).filter(User.google_id == google_id).first()
@@ -246,8 +246,8 @@ _SAFE_RESPONSE = {"message": "If this email is registered, you will receive a re
 def forgot_password(data: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     ip = rate_limiter.client_ip(request)
     account = rate_limiter.normalize_account(data.email)
-    rate_limiter.check(db, "forgot", ip, account)
-    rate_limiter.record(db, "forgot", ip, account, success=False)
+    # every request counts as an attempt (limits reset-email spam), the response is the same either way
+    rate_limiter.begin(db, "forgot", ip, account)
 
     user = db.query(User).filter(User.email == data.email).first()
 
@@ -339,8 +339,6 @@ def resend_verification(
 
     ip = rate_limiter.client_ip(request)
     account = str(user.id)
-    rate_limiter.check(db, "resend", ip, account)
-
     last_token = db.query(EmailVerificationToken).filter_by(user_id=user.id).first()
     cooldown = timedelta(seconds=_VERIFY_RESEND_COOLDOWN_SECONDS)
     if last_token and last_token.created_at and datetime.utcnow() - last_token.created_at < cooldown:
@@ -351,7 +349,7 @@ def resend_verification(
             headers={"Retry-After": str(remaining)},
         )
 
-    rate_limiter.record(db, "resend", ip, account, success=False)
+    rate_limiter.begin(db, "resend", ip, account)
     _send_verification_email(db, user)
 
     return {"message": "Verification email sent"}

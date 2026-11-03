@@ -1,11 +1,14 @@
 """Unit tests for services.rate_limiter (decision logic; the DB helpers are stubbed)."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 
 from services import rate_limiter as rl
+
+_utcnow = rl._utcnow
 
 NOW = datetime(2026, 11, 2, 12, 0, 0)
 
@@ -65,25 +68,80 @@ def test_client_ip_falls_back_when_header_missing(monkeypatch):
 
 @pytest.fixture
 def stub_db(monkeypatch):
-    """Stub the DB helpers: failure lists per scope and the time of the last success."""
+    """Stub the DB helpers; the failure lists honour `since` like the SQL filter does."""
     state = SimpleNamespace(ip=[], pair=[], last_ok=None)
 
-    def failures(db, kind, since, ip, account=None):
-        return state.pair if account is not None else state.ip
+    def failures(db, kind, since, ip, account=None, exclude_id=None):
+        source = state.pair if account is not None else state.ip
+        return [t for t in source if t >= since]
 
     monkeypatch.setattr(rl, "_failures", failures)
     monkeypatch.setattr(rl, "_last_success", lambda db, kind, ip, account, since: state.last_ok)
     return state
 
 
-def test_check_raises_429_with_retry_after_header(stub_db):
-    stub_db.pair = [datetime.utcnow()] * 5
+def _recent(n, minutes_ago=1):
+    return [_utcnow() - timedelta(minutes=minutes_ago)] * n
+
+
+def test_begin_raises_429_with_retry_after_and_drops_the_attempt(stub_db):
+    stub_db.pair = _recent(5)
+    db = MagicMock()
     with pytest.raises(HTTPException) as exc:
-        rl.check(None, "login", "1.1.1.1", "alice")
+        rl.begin(db, "login", "1.1.1.1", "alice")
     assert exc.value.status_code == 429
     assert int(exc.value.headers["Retry-After"]) > 0
+    db.delete.assert_called_once()  # a blocked attempt must not extend the block
 
 
-def test_check_passes_below_limit(stub_db):
-    stub_db.pair = [datetime.utcnow()] * 4
-    rl.check(None, "login", "1.1.1.1", "alice")
+def test_begin_keeps_the_attempt_below_the_limit(stub_db):
+    stub_db.pair = _recent(4)
+    db = MagicMock()
+    attempt = rl.begin(db, "login", "1.1.1.1", "alice")
+    assert attempt is db.add.call_args.args[0]
+    db.delete.assert_not_called()
+
+
+def test_begin_commits_the_attempt_before_counting(stub_db, monkeypatch):
+    # concurrent requests can only see each other if the row is committed before the count
+    events = []
+    counted = rl._failures
+    monkeypatch.setattr(rl, "_failures", lambda *a, **k: (events.append("count"), counted(*a, **k))[1])
+    db = MagicMock()
+    db.commit.side_effect = lambda: events.append("commit")
+
+    rl.begin(db, "login", "1.1.1.1", "alice")
+
+    assert events[0] == "commit" and "count" in events
+
+
+def test_begin_blocks_on_ip_limit_across_accounts(stub_db):
+    stub_db.ip = _recent(20)
+    with pytest.raises(HTTPException):
+        rl.begin(MagicMock(), "login", "1.1.1.1", "someone-else")
+
+
+def test_successful_login_forgives_earlier_failures(stub_db):
+    stub_db.pair = _recent(5, minutes_ago=10)
+    # the real helper reads failures newer than last_ok; the stub does the same through `since`
+    stub_db.last_ok = _utcnow() - timedelta(minutes=2)
+    rl.begin(MagicMock(), "login", "1.1.1.1", "alice")
+
+
+def test_failures_after_the_last_success_still_count(stub_db):
+    stub_db.last_ok = _utcnow() - timedelta(minutes=5)
+    stub_db.pair = _recent(5, minutes_ago=1)
+    with pytest.raises(HTTPException):
+        rl.begin(MagicMock(), "login", "1.1.1.1", "alice")
+
+
+def test_begin_without_account_counts_only_the_ip(stub_db):
+    stub_db.pair = _recent(50)  # must be ignored: no account
+    rl.begin(MagicMock(), "google", "1.1.1.1", None)
+
+
+def test_succeed_marks_the_attempt_as_success():
+    attempt, db = SimpleNamespace(success=False), MagicMock()
+    rl.succeed(db, attempt)
+    assert attempt.success is True
+    db.commit.assert_called_once()
