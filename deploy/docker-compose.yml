@@ -32,6 +32,8 @@ services:
       MAIL_PORT: ${MAIL_PORT:-587}
       APP_URL: https://${DOMAIN:-localhost}
       CORS_ORIGINS: https://${DOMAIN:-localhost},https://mariachaus.github.io
+      # Caddy is the single reverse proxy in front of the API; rate limiting reads the client IP from its X-Forwarded-For
+      TRUSTED_PROXY_COUNT: 1
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs

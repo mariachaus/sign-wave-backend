@@ -55,7 +55,7 @@ def on_shutdown():
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.warning(f"{request.method} {request.url} → {exc.status_code}: {exc.detail}")
-    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -86,6 +86,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],
 )
 
 

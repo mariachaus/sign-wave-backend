@@ -8,6 +8,7 @@ from db.models import User, UserSetting, UserStreak, UserXPLog, UserLesson
 from services.email_service import send_streak_reminder, send_weekly_summary
 
 from services.streak_utils import effective_streak_length
+from services import rate_limiter
 
 logger = logging.getLogger("signwave")
 scheduler = BackgroundScheduler()
@@ -100,9 +101,19 @@ def _send_weekly_summaries() -> None:
         db.close()
 
 
+def _purge_auth_attempts() -> None:
+    """Щодня о 03:00 — видаляє записи rate limiter, старші за період вікна rate limiter."""
+    db = SessionLocal()
+    try:
+        logger.info(f"auth_attempts purged: {rate_limiter.purge_old(db)}")
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     scheduler.add_job(_send_streak_reminders, "cron", hour=19, minute=0, id="streak_reminder")
     scheduler.add_job(_send_weekly_summaries, "cron", day_of_week="mon", hour=10, minute=0, id="weekly_summary")
+    scheduler.add_job(_purge_auth_attempts, "cron", hour=3, minute=0, id="purge_auth_attempts")
     scheduler.start()
     logger.info("scheduler started")
 
