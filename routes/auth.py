@@ -60,8 +60,9 @@ def register(data: RegisterRequest, request: Request, db: Session = Depends(get_
 
     ip = rate_limiter.client_ip(request)
     account = rate_limiter.normalize_account(email)
-    # every registration request counts as an attempt (limits sign-up spam), successful or not
-    rate_limiter.begin(db, "register", ip, account)
+    # failed registrations (duplicates, errors) count; successful ones are forgiven so that
+    # e.g. a whole class registering from one school network is not blocked
+    attempt = rate_limiter.begin(db, "register", ip, account)
 
     # 1. Check if user exists
     existing_user = db.query(User).filter(
@@ -114,6 +115,7 @@ def register(data: RegisterRequest, request: Request, db: Session = Depends(get_
             detail=str(e)
         )
 
+    rate_limiter.succeed(db, attempt)
     _send_verification_email(db, new_user)
 
     return {
