@@ -2,7 +2,7 @@ import secrets
 import logging
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 import requests as http_requests
 
@@ -14,6 +14,7 @@ from db.models import (
     PasswordResetToken, EmailVerificationToken,
 )
 from services.email_service import send_password_reset, send_email_verification
+from services import rate_limiter
 
 from core.dependencies import get_current_user_id
 from services.auth_utils import create_access_token
@@ -51,11 +52,17 @@ def _send_verification_email(db: Session, user: User) -> None:
 # ---------------- REGISTER ----------------
 
 @router.post("/register")
-def register(data: RegisterRequest, db: Session = Depends(get_db)):
+def register(data: RegisterRequest, request: Request, db: Session = Depends(get_db)):
 
     username = data.username
     email = data.email
     password = data.password
+
+    ip = rate_limiter.client_ip(request)
+    account = rate_limiter.normalize_account(email)
+    # failed registrations (duplicates, errors) count; successful ones are forgiven so that
+    # e.g. a whole class registering from one school network is not blocked
+    attempt = rate_limiter.begin(db, "register", ip, account)
 
     # 1. Check if user exists
     existing_user = db.query(User).filter(
@@ -108,6 +115,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
             detail=str(e)
         )
 
+    rate_limiter.succeed(db, attempt)
     _send_verification_email(db, new_user)
 
     return {
@@ -118,10 +126,14 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 # ---------------- LOGIN ----------------
 
 @router.post("/login")
-def login(data: LoginRequest, db: Session = Depends(get_db)):
+def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
     username = data.username
     password = data.password
+
+    ip = rate_limiter.client_ip(request)
+    account = rate_limiter.normalize_account(username)
+    attempt = rate_limiter.begin(db, "login", ip, account)
 
     user = db.query(User).filter(User.username == username).first()
 
@@ -130,6 +142,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
             status_code=401,
             detail="Invalid username or password"
         )
+
+    rate_limiter.succeed(db, attempt)
 
     # тимчасовий токен (без external libs)
     access_token = create_access_token(user.id) # type: ignore
@@ -145,8 +159,11 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 # ---------------- GOOGLE LOGIN ----------------
 
 @router.post("/google")
-def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
+def google_login(data: GoogleLoginRequest, request: Request, db: Session = Depends(get_db)):
     access_token = data.access_token
+
+    ip = rate_limiter.client_ip(request)
+    attempt = rate_limiter.begin(db, "google", ip, None)
 
     # Get user info from Google
     resp = http_requests.get(
@@ -167,6 +184,8 @@ def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
 
     if info.get("email_verified") is not True:
         raise HTTPException(status_code=400, detail="Google account email is not verified")
+
+    rate_limiter.succeed(db, attempt)
 
     # Find or create user
     user = db.query(User).filter(User.google_id == google_id).first()
@@ -226,7 +245,12 @@ def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
 _SAFE_RESPONSE = {"message": "If this email is registered, you will receive a reset link."}
 
 @router.post("/forgot-password")
-def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(data: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    ip = rate_limiter.client_ip(request)
+    account = rate_limiter.normalize_account(data.email)
+    # every request counts as an attempt (limits reset-email spam), the response is the same either way
+    rate_limiter.begin(db, "forgot", ip, account)
+
     user = db.query(User).filter(User.email == data.email).first()
 
     # Return same response regardless — avoids email enumeration
@@ -304,6 +328,7 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
 
 @router.post("/resend-verification")
 def resend_verification(
+    request: Request,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
@@ -314,11 +339,19 @@ def resend_verification(
     if user.is_email_verified:
         raise HTTPException(status_code=400, detail="Email is already verified")
 
+    ip = rate_limiter.client_ip(request)
+    account = str(user.id)
     last_token = db.query(EmailVerificationToken).filter_by(user_id=user.id).first()
     cooldown = timedelta(seconds=_VERIFY_RESEND_COOLDOWN_SECONDS)
     if last_token and last_token.created_at and datetime.utcnow() - last_token.created_at < cooldown:
-        raise HTTPException(status_code=429, detail="Please wait a minute before requesting another email")
+        remaining = max(1, int((cooldown - (datetime.utcnow() - last_token.created_at)).total_seconds()))
+        raise HTTPException(
+            status_code=429,
+            detail="Please wait a minute before requesting another email",
+            headers={"Retry-After": str(remaining)},
+        )
 
+    rate_limiter.begin(db, "resend", ip, account)
     _send_verification_email(db, user)
 
     return {"message": "Verification email sent"}

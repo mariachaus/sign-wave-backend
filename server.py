@@ -55,7 +55,7 @@ def on_shutdown():
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.warning(f"{request.method} {request.url} → {exc.status_code}: {exc.detail}")
-    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -69,13 +69,24 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 # ---------------- CORS ----------------
 
+_default_origins = ["https://mariachaus.github.io"]
+_env_origins = [
+    o.strip().rstrip("/")
+    for o in os.getenv("CORS_ORIGINS", "").split(",")
+    if o.strip()
+]
+_app_url = os.getenv("APP_URL", "").strip().rstrip("/")
+if _app_url and _app_url not in _env_origins:
+    _env_origins.append(_app_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://mariachaus.github.io"],
-    allow_origin_regex=r"https?://(localhost|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?",
+    allow_origins=list(dict.fromkeys(_default_origins + _env_origins)),
+    allow_origin_regex=r"https?://(localhost|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|[\w-]+\.[\w-]+\.cloudapp\.azure\.com)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],
 )
 
 

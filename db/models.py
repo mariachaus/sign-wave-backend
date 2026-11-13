@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Numeric, Date, UniqueConstraint, JSON, func
+    Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Numeric, Date, UniqueConstraint, JSON, Index, func
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, date
@@ -363,3 +363,20 @@ class Friendship(Base):
 
     requester = relationship("User", foreign_keys=[requester_id])
     addressee = relationship("User", foreign_keys=[addressee_id])
+
+
+class AuthAttempt(Base):
+    """Auth attempts used by services.rate_limiter (counters live in PostgreSQL, ADR-1)."""
+    __tablename__ = "auth_attempts"
+
+    id = Column(Integer, primary_key=True)
+    kind = Column(String(20), nullable=False)  # login | register | forgot | google | resend
+    ip = Column(String(64), nullable=False)
+    account = Column(String(255))  # normalized username/email; NULL when unknown (google)
+    success = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_auth_attempts_ip', 'kind', 'ip', 'created_at'),
+        Index('ix_auth_attempts_account', 'kind', 'account', 'created_at'),
+    )
