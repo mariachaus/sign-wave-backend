@@ -11,8 +11,12 @@ import numpy as np
 import keras
 import time
 import psutil
+import logging
 
 from fastapi import APIRouter, HTTPException, Body, WebSocket, WebSocketDisconnect
+from core.metrics import ML_INFERENCE_DURATION, ML_PREDICTIONS_TOTAL, WS_ACTIVE_CONNECTIONS
+
+logger = logging.getLogger("signwave.ml")
 
 def get_process_memory_mb():
     process = psutil.Process(os.getpid())
@@ -48,8 +52,8 @@ def _log_inference(endpoint: str, label: str, confidence: float, inference_ms: f
                 round(get_process_memory_mb(), 1),  # поточний RAM
                 os.path.basename(model_path),
             ])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"[ml/csv] failed to write inference log: {e}", exc_info=True)
 
 
 _MODEL_LOG = os.path.join(BASE_DIR, "logs", "model_load_log.csv")
@@ -68,8 +72,8 @@ def _log_model_load(model_name, ram_before, ram_after):
                 round(ram_after, 1),
                 round(ram_after - ram_before, 1),
             ])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"[ml/csv] failed to write model load log: {e}", exc_info=True)
 
 # ---------------- LOAD MODEL ----------------
 
@@ -90,8 +94,8 @@ model_path = os.path.join(MODELS_DIR, _chosen)
 
 model: Any = None
 
-print("BASE_DIR:", BASE_DIR)
-print("MODEL_PATH:", model_path)
+logger.info(f"BASE_DIR: {BASE_DIR}")
+logger.info(f"MODEL_PATH: {model_path}")
 
 if os.path.exists(model_path):
     try:
@@ -106,16 +110,13 @@ if os.path.exists(model_path):
         mem_after = get_process_memory_mb()
         model_ram_used = mem_after - mem_before
         
-        print("✅ ML: Model loaded successfully!")
-        print(f"📊 RAM before: {mem_before:.2f} MB")
-        print(f"📊 RAM after:  {mem_after:.2f} MB")
-        print(f"🔥 Model RAM:  {model_ram_used:.2f} MB")
+        logger.info(f"ML: Model loaded successfully (RAM before: {mem_before:.2f} MB, after: {mem_after:.2f} MB, used: {model_ram_used:.2f} MB)")
 
         #_log_model_load(os.path.basename(model_path), mem_before, mem_after)   # type: ignore
     except Exception as e:
-        print(f"❌ ML: Model loading error: {e}")
+        logger.error(f"ML: Model loading error: {e}", exc_info=True)
 else:
-    print(f"❌ ML: Model file not found: {model_path}")
+    logger.warning(f"ML: Model file not found: {model_path}")
 
 
 # ---------------- LOAD LABELS ----------------
@@ -136,10 +137,10 @@ else:
 if os.path.exists(labels_path):
     with open(labels_path, "r", encoding="utf-8") as f:
         LABELS = json.load(f)
-    print(f"✅ ML: Labels loaded: {LABELS}")
+    logger.info(f"ML: Labels loaded: {LABELS}")
 else:
     LABELS = ["not-found"]
-    print("⚠️ ML: Labels not found, using defaults.")
+    logger.warning("ML: Labels not found, using defaults.")
 
 
 
@@ -172,20 +173,23 @@ def predict(data: dict = Body(...)):
         if input_data.shape != (20, 450):
             try:
                 input_data = input_data.reshape(1, 20, 450)
-            except:
+            except Exception as e:
+                logger.error(f"[predict] reshape failed for shape {input_data.shape}: {e}")
                 raise HTTPException(status_code=400, detail=f"Wrong shape: {input_data.shape}")
         else:
             input_data = np.expand_dims(input_data, axis=0)
 
         start_time = time.time()
         prediction = model(input_data, training=False).numpy()
-        inference_ms = round((time.time() - start_time) * 1000, 2)
-        print(f"[predict] inference: {inference_ms} ms")
+        duration_sec = time.time() - start_time
+        inference_ms = round(duration_sec * 1000, 2)
+        ML_INFERENCE_DURATION.observe(duration_sec)
+        ML_PREDICTIONS_TOTAL.labels(status="success").inc()
+        logger.debug(f"[predict] inference: {inference_ms} ms")
 
         class_id = int(np.argmax(prediction))
         confidence = float(prediction[0][class_id])
         label_name = LABELS[class_id]
-        #_log_inference("predict", label_name, confidence, inference_ms)
         all_scores = {LABELS[i]: round(float(prediction[0][i]), 4) for i in range(len(LABELS))}
 
         return {
@@ -196,6 +200,8 @@ def predict(data: dict = Body(...)):
         }
 
     except Exception as e:
+        ML_PREDICTIONS_TOTAL.labels(status="error").inc()
+        logger.error(f"[predict] error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=str(e)
@@ -259,8 +265,7 @@ def _init_mp_landmarkers() -> bool:
         hand_path = os.path.join(mp_dir, "hand_landmarker.task")
 
         if not os.path.exists(pose_path) or not os.path.exists(hand_path):
-            print(f"❌ ML/WS: .task files not found in {mp_dir}")
-            print("   Download from: https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker")
+            logger.warning(f"ML/WS: .task files not found in {mp_dir}. Download from: https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker")
             return False
 
         _pose_lm = mpv.PoseLandmarker.create_from_options(
@@ -278,13 +283,13 @@ def _init_mp_landmarkers() -> bool:
             )
         )
         _mp_ready = True
-        print("✅ ML/WS: MediaPipe Python landmarkers ready!")
+        logger.info("ML/WS: MediaPipe Python landmarkers ready!")
         return True
     except ImportError as e:
-        print(f"❌ ML/WS: mediapipe/opencv not installed: {e}")
+        logger.warning(f"ML/WS: mediapipe/opencv not installed: {e}")
         return False
     except Exception as e:
-        print(f"❌ ML/WS: init error: {e}")
+        logger.error(f"ML/WS: init error: {e}", exc_info=True)
         return False
 
 
@@ -370,6 +375,8 @@ async def predict_ws(websocket: WebSocket):
         await websocket.send_text(json.dumps({"error": "Model not loaded"}))
         await websocket.close()
         return
+
+    WS_ACTIVE_CONNECTIONS.inc()
     try:
         while True:
             raw = await websocket.receive_text()
@@ -388,12 +395,14 @@ async def predict_ws(websocket: WebSocket):
                 input_data = np.expand_dims(input_data, axis=0)
             t0 = time.time()
             prediction = model(input_data, training=False).numpy()
-            inference_ms = round((time.time() - t0) * 1000, 2)
-            print(f"[ws/predict] inference: {inference_ms} ms")
+            duration_sec = time.time() - t0
+            inference_ms = round(duration_sec * 1000, 2)
+            ML_INFERENCE_DURATION.observe(duration_sec)
+            ML_PREDICTIONS_TOTAL.labels(status="success").inc()
+            logger.debug(f"[ws/predict] inference: {inference_ms} ms")
             class_id = int(np.argmax(prediction))
             confidence = float(prediction[0][class_id])
             label = LABELS[class_id]
-            #_log_inference("ws/predict", label, confidence, inference_ms)
             all_scores = {LABELS[i]: round(float(prediction[0][i]), 4) for i in range(len(LABELS))}
             await websocket.send_text(json.dumps({
                 "label": label,
@@ -404,7 +413,9 @@ async def predict_ws(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        print(f"[WS/predict] {e}")
+        logger.error(f"[WS/predict] {e}", exc_info=True)
+    finally:
+        WS_ACTIVE_CONNECTIONS.dec()
 
 
 @router.websocket("/ws/gesture")
@@ -421,6 +432,7 @@ async def gesture_ws(websocket: WebSocket):
     frame_buffer: list = []
     pred_history: list = []
 
+    WS_ACTIVE_CONNECTIONS.inc()
     try:
         while True:
             raw = await websocket.receive_text()
@@ -464,10 +476,12 @@ async def gesture_ws(websocket: WebSocket):
             inp = np.expand_dims(_add_delta(frame_buffer), axis=0)
             t0 = time.time()
             preds = model(inp, training=False).numpy()[0]
-            inference_ms = round((time.time() - t0) * 1000, 2)
-            print(f"[ws/gesture] inference: {inference_ms} ms")
+            duration_sec = time.time() - t0
+            inference_ms = round(duration_sec * 1000, 2)
+            ML_INFERENCE_DURATION.observe(duration_sec)
+            ML_PREDICTIONS_TOTAL.labels(status="success").inc()
+            logger.debug(f"[ws/gesture] inference: {inference_ms} ms")
             cls = int(np.argmax(preds))
-            #_log_inference("ws/gesture", LABELS[cls], float(preds[cls]), inference_ms)
             conf = float(preds[cls])
             label = LABELS[cls]
 
@@ -495,4 +509,6 @@ async def gesture_ws(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        print(f"[WS/gesture] {e}")
+        logger.error(f"[WS/gesture] {e}", exc_info=True)
+    finally:
+        WS_ACTIVE_CONNECTIONS.dec()

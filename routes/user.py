@@ -1,12 +1,14 @@
-from datetime import date, timedelta
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+import os
+from datetime import date
+
 import cloudinary
 import cloudinary.uploader
-import os
-from services.streak_utils import effective_streak_length
 from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from services.streak_utils import effective_streak_length
 
 load_dotenv()
 
@@ -16,15 +18,19 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET"),
 )
 
+import logging
+
 from core.dependencies import get_current_user_id
+
+logger = logging.getLogger("signwave.user")
 from db.connection import get_db
 from db.models import (
+    Achievement,
     User,
-    UserStreak,
+    UserAchievement,
     UserErrorLog,
     UserGestureStat,
-    UserAchievement,
-    Achievement
+    UserStreak,
 )
 
 router = APIRouter(tags=["User"])
@@ -32,10 +38,10 @@ router = APIRouter(tags=["User"])
 
 # ---------------- PROFILE ----------------
 
+
 @router.get("/profile")
 def get_profile(
-    user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
+    user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)
 ):
 
     try:
@@ -48,15 +54,21 @@ def get_profile(
         errors_made = db.query(UserErrorLog).filter_by(user_id=user_id).count()
 
         # 2. learned gestures
-        signs_learned = db.query(UserGestureStat).filter(
-            UserGestureStat.user_id == user_id,
-            UserGestureStat.correct_count >= 1
-        ).count()
+        signs_learned = (
+            db.query(UserGestureStat)
+            .filter(
+                UserGestureStat.user_id == user_id, UserGestureStat.correct_count >= 1
+            )
+            .count()
+        )
 
         # 3. total correct answers
-        total_correct = db.query(
-            func.sum(UserGestureStat.correct_count)
-        ).filter(UserGestureStat.user_id == user_id).scalar() or 0
+        total_correct = (
+            db.query(func.sum(UserGestureStat.correct_count))
+            .filter(UserGestureStat.user_id == user_id)
+            .scalar()
+            or 0
+        )
 
         # 4. achievements (JOIN)
         achievements_query = (
@@ -75,51 +87,61 @@ def get_profile(
                 "description": ach.description,
                 "icon_url": ach.icon_url,
                 "points_awarded": ach.points_awarded,
-                "earned_at": earned_at.isoformat()
+                "earned_at": earned_at.isoformat(),
             }
             for ach, earned_at in achievements_query
         ]
 
-        current_streak_row = db.query(UserStreak).filter(
-            UserStreak.user_id == user_id,
-            UserStreak.is_current == True,
-        ).first()
+        current_streak_row = (
+            db.query(UserStreak)
+            .filter(
+                UserStreak.user_id == user_id,
+                UserStreak.is_current == True,
+            )
+            .first()
+        )
 
         return {
             "username": user.username,
             "email": user.email,
             "is_email_verified": user.is_email_verified,
-            "joined_at": user.created_at.strftime("%d %B %Y") if user.created_at else "Unknown", # type: ignore
+            "joined_at": user.created_at.strftime("%d %B %Y")
+            if user.created_at
+            else "Unknown",  # type: ignore
             "total_xp": user.total_xp,
             "avatar_url": user.avatar_url,
             "role": user.role,
             "current_streak": effective_streak_length(current_streak_row),
-            "longest_streak": db.query(func.max(UserStreak.streak_length)).filter(
-                UserStreak.user_id == user_id
-            ).scalar() or 0,
+            "longest_streak": db.query(func.max(UserStreak.streak_length))
+            .filter(UserStreak.user_id == user_id)
+            .scalar()
+            or 0,
             "achievements": ach_list,
             "stats": {
                 "errors_made": errors_made,
                 "errors_corrected": int(total_correct),
-                "signs_learned": signs_learned
-            }
+                "signs_learned": signs_learned,
+            },
         }
 
     except Exception as e:
-        print(f"Error in get_profile: {e}")
+        logger.error(f"Error in get_profile: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
 # ---------------- UPLOAD AVATAR ----------------
 
+
 @router.post("/upload-avatar")
 async def upload_avatar(
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
-        raise HTTPException(status_code=400, detail="Only JPEG, PNG or WebP images are allowed")
+        raise HTTPException(
+            status_code=400, detail="Only JPEG, PNG or WebP images are allowed"
+        )
 
     contents = await file.read()
     if len(contents) > 5 * 1024 * 1024:
@@ -130,7 +152,9 @@ async def upload_avatar(
         folder="signwave/avatars",
         public_id=f"user_{user_id}",
         overwrite=True,
-        transformation=[{"width": 400, "height": 400, "crop": "fill", "gravity": "face"}],
+        transformation=[
+            {"width": 400, "height": 400, "crop": "fill", "gravity": "face"}
+        ],
     )
 
     avatar_url = result["secure_url"]
@@ -144,16 +168,18 @@ async def upload_avatar(
 
 # ---------------- ALL ACHIEVEMENTS ----------------
 
+
 @router.get("/achievements")
 def get_all_achievements(
-    user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
+    user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)
 ):
     all_achievements = db.query(Achievement).filter(Achievement.is_active == True).all()
 
     earned_map = {
         ua.achievement_id: ua.earned_at
-        for ua in db.query(UserAchievement).filter(UserAchievement.user_id == user_id).all()
+        for ua in db.query(UserAchievement)
+        .filter(UserAchievement.user_id == user_id)
+        .all()
     }
 
     result = [
@@ -164,7 +190,9 @@ def get_all_achievements(
             "icon_url": ach.icon_url,
             "points_awarded": ach.points_awarded,
             "earned": ach.id in earned_map,
-            "earned_at": earned_map[ach.id].isoformat() if ach.id in earned_map else None,
+            "earned_at": earned_map[ach.id].isoformat()
+            if ach.id in earned_map
+            else None,
         }
         for ach in all_achievements
     ]
@@ -175,22 +203,29 @@ def get_all_achievements(
 
 # ---------------- STREAK ----------------
 
+
 @router.get("/streak")
 def get_streak(
-    user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
+    user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)
 ):
-    streak = db.query(UserStreak).filter(
-        UserStreak.user_id == user_id,
-        UserStreak.is_current == True,
-    ).first()
+    streak = (
+        db.query(UserStreak)
+        .filter(
+            UserStreak.user_id == user_id,
+            UserStreak.is_current == True,
+        )
+        .first()
+    )
     if not streak:
         return {"current_streak": 0, "longest_streak": 0, "freeze_shields": 0}
 
     current = effective_streak_length(streak)
-    longest = db.query(func.max(UserStreak.streak_length)).filter(
-        UserStreak.user_id == user_id
-    ).scalar() or 0
+    longest = (
+        db.query(func.max(UserStreak.streak_length))
+        .filter(UserStreak.user_id == user_id)
+        .scalar()
+        or 0
+    )
 
     return {
         "current_streak": current,
@@ -201,10 +236,10 @@ def get_streak(
 
 # ---------------- STREAK CALENDAR ----------------
 
+
 @router.get("/streak-calendar")
 def get_streak_calendar(
-    user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
+    user_id: int = Depends(get_current_user_id), db: Session = Depends(get_db)
 ):
     all_streaks = (
         db.query(UserStreak)
@@ -215,9 +250,12 @@ def get_streak_calendar(
     if not all_streaks:
         return {"streak_periods": [], "current_streak": 0, "longest_streak": 0}
 
-    longest = db.query(func.max(UserStreak.streak_length)).filter(
-        UserStreak.user_id == user_id
-    ).scalar() or 0
+    longest = (
+        db.query(func.max(UserStreak.streak_length))
+        .filter(UserStreak.user_id == user_id)
+        .scalar()
+        or 0
+    )
 
     current_row = next((s for s in all_streaks if s.is_current), None)
 
@@ -231,12 +269,14 @@ def get_streak_calendar(
             end_iso = s.last_activity_at.date().isoformat()
         else:
             end_iso = date.today().isoformat()
-        periods.append({
-            "started_at": s.started_at.isoformat(),
-            "ended_at": end_iso,
-            "is_current": bool(s.is_current) and effective_streak_length(s) > 0,
-            "streak_length": s.streak_length or 0,
-        })
+        periods.append(
+            {
+                "started_at": s.started_at.isoformat(),
+                "ended_at": end_iso,
+                "is_current": bool(s.is_current) and effective_streak_length(s) > 0,
+                "streak_length": s.streak_length or 0,
+            }
+        )
 
     return {
         "streak_periods": periods,
