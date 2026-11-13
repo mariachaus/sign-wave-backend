@@ -11,15 +11,23 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
 ):
     if not credentials:
         raise HTTPException(status_code=401, detail="No token")
 
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        return int(payload["sub"])
-    except (JWTError, KeyError, ValueError):
+        user_id = int(payload["sub"])
+        # tokens issued before token_version existed have no "ver" claim and count as version 0
+        version = int(payload.get("ver", 0))
+    except (JWTError, KeyError, ValueError, TypeError):
         raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.get(User, user_id)
+    if not user or user.token_version != version:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user_id
 
 
 def get_verified_user_id(

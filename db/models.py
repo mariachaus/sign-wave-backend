@@ -22,6 +22,8 @@ class User(Base):
     role = Column(String(20), default='user', nullable=False)
     is_active = Column(Boolean, default=True)
     is_email_verified = Column(Boolean, default=False, server_default='false', nullable=False)
+    # Bumped to revoke every JWT issued to the user (tokens carry it as the "ver" claim)
+    token_version = Column(Integer, default=0, server_default='0', nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
