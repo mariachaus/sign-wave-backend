@@ -12,9 +12,10 @@ if not SECRET_KEY:
 ALGORITHM = "HS256"
 
 
-def create_access_token(user_id: int):
+def create_access_token(user_id: int, token_version: int = 0):
     payload = {
         "sub": str(user_id),
+        "ver": token_version,
         "exp": datetime.utcnow() + timedelta(days=7)
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)

@@ -137,7 +137,8 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
     user = db.query(User).filter(User.username == username).first()
 
-    if not user or not check_password_hash(str(user.password_hash), password):
+    # accounts without a password (Google-only) can't log in through the form
+    if not user or not user.password_hash or not check_password_hash(str(user.password_hash), password):
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password"
@@ -145,8 +146,7 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
     rate_limiter.succeed(db, attempt)
 
-    # тимчасовий токен (без external libs)
-    access_token = create_access_token(user.id) # type: ignore
+    access_token = create_access_token(user.id, user.token_version)  # type: ignore
 
     return {
         "access_token": access_token,
@@ -194,6 +194,12 @@ def google_login(data: GoogleLoginRequest, request: Request, db: Session = Depen
         # Check if email already exists (regular account)
         user = db.query(User).filter(User.email == email).first()
         if user:
+            if not user.is_email_verified:
+                logger.warning(f"google login took over unverified account user_id={user.id}")
+                user.password_hash = None  # type: ignore
+                user.token_version = (user.token_version or 0) + 1  # type: ignore
+                db.query(PasswordResetToken).filter_by(user_id=user.id).delete()
+                db.query(EmailVerificationToken).filter_by(user_id=user.id).delete()
             # Link Google ID to existing account
             user.google_id = google_id  # type: ignore
             user.is_email_verified = True  # type: ignore
@@ -231,7 +237,7 @@ def google_login(data: GoogleLoginRequest, request: Request, db: Session = Depen
         db.commit()
         db.refresh(user)
 
-    access_token = create_access_token(user.id)  # type: ignore
+    access_token = create_access_token(user.id, user.token_version)  # type: ignore
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -295,6 +301,8 @@ def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
     user.password_hash = generate_password_hash(data.new_password)  # type: ignore
     # The reset link was delivered to this email, so the user owns it
     user.is_email_verified = True  # type: ignore
+    # Log out every session that used the old password
+    user.token_version = (user.token_version or 0) + 1  # type: ignore
     db.delete(reset_token)
     db.commit()
 
