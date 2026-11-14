@@ -22,9 +22,11 @@ from routes.health import router as health_router
 
 
 import os
+import time
 import logging
 from logging.handlers import RotatingFileHandler
 from services.scheduler import start_scheduler, stop_scheduler
+from core.metrics import setup_monitoring
 
 os.environ["GLOG_minloglevel"] = "3"
 
@@ -91,6 +93,22 @@ app.add_middleware(
 )
 
 
+# ---------------- REQUEST LOGGING MIDDLEWARE ----------------
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start_time) * 1000
+
+    # Avoid cluttering logs with polling/metrics endpoints
+    if request.url.path not in ("/metrics", "/"):
+        logger.info(
+            f"{request.method} {request.url.path} status={response.status_code} duration={duration_ms:.2f}ms"
+        )
+    return response
+
+
 # ---------------- DB INIT ----------------
 
 Base.metadata.create_all(bind=engine)
@@ -110,6 +128,11 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(flashcards_router, prefix="/api")
 app.include_router(friends_router, prefix="/api/friends")
 app.include_router(health_router) 
+
+
+# ---------------- MONITORING / PROMETHEUS ----------------
+
+setup_monitoring(app)
 
 
 # ---------------- ROOT ----------------

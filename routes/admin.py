@@ -20,6 +20,9 @@ from db.connection import get_db
 from db.models import User, Gesture, GestureI18n, GestureSynonym, GestureCategory, Category, CategoryI18n, LessonGesturesPool, UserGestureStat, UserErrorLog, Lesson, DailyTaskTemplate, Level, LevelI18n, LessonI18n, LessonContent, UserLesson
 from core.dependencies import get_current_user_id
 from schemas import AdminUserUpdate, AdminTemplateCreate, AdminTemplateUpdate, AdminGestureCreate, AdminGestureUpdate, AdminLessonCreate, AdminLessonUpdate, AdminPoolAdd, AdminContentCreate, AdminContentUpdate, AdminLevelCreate, AdminLevelUpdate, AdminCategoryCreate, AdminCategoryUpdate
+import logging
+
+logger = logging.getLogger("signwave.admin")
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -60,8 +63,8 @@ def get_model_info(admin_id: int = Depends(require_admin)):
     if model is not None:
         try:
             param_count = model.count_params()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"[admin] Failed to count model params: {e}", exc_info=True)
 
     return {
         "model_file": model_file,
@@ -84,7 +87,8 @@ def list_models(admin_id: int = Depends(require_admin)):
     result = []
     try:
         entries = os.listdir(MODELS_DIR)
-    except Exception:
+    except Exception as e:
+        logger.error(f"[admin] Failed to list models directory: {e}", exc_info=True)
         return []
     for f in sorted(entries):
         if not f.endswith(".keras"):
@@ -130,7 +134,7 @@ def activate_model(body: dict, admin_id: int = Depends(require_admin)):
         ml_module._model_loading = True
 
         # === MEMORY CLEANUP BEFORE LOADING ===
-        print(f"[admin] Clearing memory from previous model...")
+        logger.info("[admin] Clearing memory from previous model...")
         if ml_module.model is not None:
             del ml_module.model 
             ml_module.model = None
@@ -139,7 +143,7 @@ def activate_model(body: dict, admin_id: int = Depends(require_admin)):
         gc.collect()  
         # =============================================================
 
-        print(f"[admin] Loading model: {filename}")
+        logger.info(f"[admin] Loading model: {filename}")
 
         new_model = _keras.models.load_model(new_model_path, compile=False)
 
@@ -161,7 +165,7 @@ def activate_model(body: dict, admin_id: int = Depends(require_admin)):
 
         with open(ml_module._ACTIVE_MODEL_FILE, "w") as f:
             f.write(filename)
-        print(f"[admin] Model switched to: {filename} ({len(new_labels)} classes)")
+        logger.info(f"[admin] Model switched to: {filename} ({len(new_labels)} classes)")
 
         import pathlib
         pathlib.Path("reload.trigger").touch()
