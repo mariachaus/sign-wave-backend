@@ -1,6 +1,6 @@
-from email_service import send_test_email
-from database_connection import SessionLocal
-from database import User, UserSetting
+from services.email_service import send_test_email
+from db.connection import SessionLocal
+from db.models import User, UserSetting
 from dotenv import load_dotenv
 
 load_dotenv()
