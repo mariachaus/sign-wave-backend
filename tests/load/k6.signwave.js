@@ -16,6 +16,7 @@ const WS_BASE = BASE.replace(/^http/, 'ws');
 const PROFILE = __ENV.PROFILE || 'stress';
 
 const errorRate = new Rate('errors');
+const rateLimited = new Counter('rate_limited_responses');
 const httpPredict = new Trend('ml_predict_duration', true);
 const wsRtt = new Trend('ws_predict_rtt', true);
 const registered = new Counter('users_registered');
@@ -27,6 +28,7 @@ const profiles = {
     api:       { executor: 'constant-vus', vus: 5,  duration: '30s', exec: 'apiFlow', startTime: '5s' },
     ml_http:   { executor: 'constant-vus', vus: 3,  duration: '30s', exec: 'mlPredictHttp', startTime: '5s' },
     ml_ws:     { executor: 'constant-vus', vus: 3,  duration: '30s', exec: 'mlPredictWs', startTime: '5s' },
+    health:    { executor: 'constant-vus', vus: 5,  duration: '30s', exec: 'healthFlow', startTime: '5s' },
   },
   stress: {
     auth:      { executor: 'ramping-vus', startVUs: 0, exec: 'authFlow',
@@ -40,6 +42,9 @@ const profiles = {
     ml_ws:     { executor: 'ramping-vus', startVUs: 0, exec: 'mlPredictWs', startTime: '30s',
                  stages: [{ duration: '2m', target: 10 }, { duration: '2m', target: 40 },
                           { duration: '3m', target: 40 }, { duration: '1m', target: 0 }] },
+    health:    { executor: 'ramping-vus', startVUs: 0, exec: 'healthFlow', startTime: '15s',
+                 stages: [{ duration: '1m', target: 20 }, { duration: '5m', target: 20 },
+                          { duration: '1m', target: 0 }] },
   },
 };
 
@@ -106,9 +111,29 @@ function authHeaders() {
 
 function hit(name, url, headers) {
   const r = http.get(url, { headers, tags: { name }, timeout: '30s' });
-  const ok = check(r, { [`${name} 2xx/401`]: (x) => x.status >= 200 && x.status < 500 });
+  if (r.status === 429) rateLimited.add(1);
+  const ok = check(r, { [`${name} ok`]: (x) => (x.status >= 200 && x.status < 500) || x.status === 429 });
   errorRate.add(!ok || r.status >= 500);
   return r;
+}
+
+function postOk(name, url, body, okStatuses) {
+  const r = http.post(url, JSON.stringify(body), { headers: JSON_HEADERS, tags: { name }, timeout: '30s' });
+  if (r.status === 429) rateLimited.add(1);
+  const ok = check(r, { [`${name} status`]: (x) => okStatuses.includes(x.status) });
+  errorRate.add(!ok);
+  return r;
+}
+
+// Health endpoints (new): /health — cheap liveness; /health/ready — touches DB + model flag.
+export function healthFlow() {
+  const live = http.get(`${BASE}/health`, { tags: { name: 'health' }, timeout: '10s' });
+  check(live, { 'health 200': (x) => x.status === 200 });
+  errorRate.add(live.status !== 200);
+  const ready = http.get(`${BASE}/health/ready`, { tags: { name: 'health_ready' }, timeout: '30s' });
+  check(ready, { 'ready 200/503': (x) => x.status === 200 || x.status === 503 });
+  errorRate.add(ready.status !== 200 && ready.status !== 503);
+  sleep(2);
 }
 
 // ---------- scenario bodies ----------
@@ -119,17 +144,17 @@ export function authFlow() {
     email: `auth_${__VU}_${uuidv4().slice(0, 8)}@k6load.dev`,
     password: 'LoadTest!234',
   };
-  const reg = http.post(`${BASE}/api/auth/register`, JSON.stringify(u), { headers: JSON_HEADERS, tags: { name: 'register' } });
-  const regOk = check(reg, { 'register 200/400': (x) => x.status === 200 || x.status === 400 });
-  errorRate.add(!regOk);
+  // Rate limiter: 429 is an expected, measured outcome under stress — not a test failure.
+  const reg = postOk('register', `${BASE}/api/auth/register`, u, [200, 400, 429]);
   if (reg.status === 200) registered.add(1);
 
-  const l = http.post(`${BASE}/api/auth/login`,
-    JSON.stringify({ username: u.username, password: u.password }),
-    { headers: JSON_HEADERS, tags: { name: 'login' } });
-  const loginExpected = reg.status === 200 ? 200 : 401;
-  const ok = check(l, { 'login status': (x) => x.status === loginExpected });
-  errorRate.add(!ok);
+  const l = postOk('login', `${BASE}/api/auth/login`,
+    { username: u.username, password: u.password },
+    reg.status === 200 ? [200, 429] : [400, 401, 429]);
+
+  // Public auth endpoints that exist after the email-verification update.
+  postOk('forgot_password', `${BASE}/api/auth/forgot-password`, { email: u.email }, [200, 400, 404, 422, 429]);
+  postOk('resend_verification', `${BASE}/api/auth/resend-verification`, { email: u.email }, [200, 400, 404, 422, 429]);
   sleep(1);
 }
 
@@ -146,6 +171,10 @@ export function apiFlow() {
   hit('profile', `${BASE}/api/user/profile`, h);
   sleep(0.3);
   hit('daily_tasks', `${BASE}/api/daily-tasks/`, h);
+  sleep(0.3);
+  hit('friends', `${BASE}/api/friends`, h);
+  sleep(0.3);
+  hit('friend_requests', `${BASE}/api/friends/requests`, h);
   sleep(1);
 }
 
