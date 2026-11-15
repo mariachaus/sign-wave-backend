@@ -28,8 +28,9 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
+          sed -i 's/^tensorflow==/tensorflow-cpu==/; /^opencv-contrib-python==/d' requirements.txt
           pip install -r requirements.txt
-          pip install pytest pytest-cov httpx
+          pip install pytest pytest-cov
 
       - name: Run unit tests
         env:
