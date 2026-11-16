@@ -20,6 +20,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from db.models import AuthAttempt
+from core.metrics import RATE_LIMIT_EXCEEDED_TOTAL
 
 logger = logging.getLogger("signwave")
 
@@ -119,6 +120,7 @@ def begin(db: Session, kind: str, ip: str, account: str | None) -> AuthAttempt:
 
     wait = evaluate(ip_failures, pair_failures, now)
     if wait:
+        RATE_LIMIT_EXCEEDED_TOTAL.labels(endpoint=kind).inc()
         db.delete(attempt)
         db.commit()
         logger.warning(f"rate limit: kind={kind} ip={ip} account={account} retry_after={wait}s")

@@ -24,6 +24,9 @@ class PracticeCompleteRequest(BaseModel):
     errors: list[ErrorDetail] = []
 
 from core.dependencies import get_current_user_id
+import logging
+
+logger = logging.getLogger("signwave.lesson")
 
 router = APIRouter(prefix="/lessons", tags=["Lessons"])
 
@@ -311,13 +314,13 @@ def complete_practice(
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"[practice/complete] commit error: {e}")
+        logger.error(f"[practice/complete] commit error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
         update_task_progress(user_id, "practice_completed", db, gesture_id=gesture_id, xp_gained=streak_xp)
     except Exception as e:
-        print(f"[daily-tasks] update failed after practice: {e}")
+        logger.warning(f"[daily-tasks] update failed after practice: {e}")
 
     try:
         update_gesture_stat(user_id, gesture_id, correct=True, db=db)
@@ -332,7 +335,7 @@ def complete_practice(
             ))
         db.commit()
     except Exception as e:
-        print(f"[gesture-stat] update failed after practice: {e}")
+        logger.warning(f"[gesture-stat] update failed after practice: {e}")
         db.rollback()
 
     new_achievements = []
@@ -341,7 +344,7 @@ def complete_practice(
         if new_achievements:
             db.commit()
     except Exception as e:
-        print(f"[achievements] check failed after practice: {e}")
+        logger.warning(f"[achievements] check failed after practice: {e}")
         db.rollback()
 
     streak = db.query(UserStreak).filter(
@@ -678,8 +681,9 @@ def start_lesson(
 
     try:
         db.commit()
-    except Exception:
+    except Exception as e:
         db.rollback()
+        logger.error(f"[lesson/start] failed to commit user_lesson progress: {e}", exc_info=True)
 
     return {"lesson_id": lesson.id, "lesson_name": trans.name, "steps": steps}
 
@@ -758,8 +762,9 @@ def complete_lesson(
 
     try:
         db.commit()
-    except Exception:
+    except Exception as e:
         db.rollback()
+        logger.error(f"[lesson/complete] failed to commit lesson progress: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to save lesson progress")
 
     # 5. Щоденні завдання
@@ -767,7 +772,7 @@ def complete_lesson(
         perfect = payload.hearts_remaining >= 5
         update_task_progress(user_id, "lesson_completed", db, xp_gained=lesson_xp, perfect=perfect)
     except Exception as e:
-        print(f"[daily-tasks] update failed after lesson: {e}")
+        logger.warning(f"[daily-tasks] update failed after lesson: {e}")
 
 
     # 6. Оновлення статистики жестів (успіхи та помилки)
@@ -786,7 +791,7 @@ def complete_lesson(
                 
         db.commit()
     except Exception as e:
-        print(f"[gesture-stat] update failed after lesson: {e}")
+        logger.warning(f"[gesture-stat] update failed after lesson: {e}")
         db.rollback()
 
     new_achievements = []
@@ -795,7 +800,7 @@ def complete_lesson(
         if new_achievements:
             db.commit()
     except Exception as e:
-        print(f"[achievements] check failed after lesson: {e}")
+        logger.warning(f"[achievements] check failed after lesson: {e}")
         db.rollback()
 
     streak = db.query(UserStreak).filter(

@@ -12,6 +12,7 @@ FastAPI backend for the SignWave Ukrainian Sign Language learning app.
 - **JWT** + Google OAuth — authentication
 - **APScheduler** — background job scheduler (email notifications)
 - **smtplib** — email delivery via Gmail SMTP (built-in)
+- **Prometheus** + **Grafana** — telemetry, HTTP metrics, ML inference tracking & dashboards
 
 ## Project Structure
 
@@ -22,7 +23,8 @@ backend/
 ├── test_email.py                 # send test emails to subscribed users
 ├── requirements.txt
 ├── core/
-│   └── dependencies.py           # get_current_user_id dependency
+│   ├── dependencies.py           # get_current_user_id dependency
+│   └── metrics.py                # Prometheus custom metrics & instrumentator
 ├── db/
 │   ├── models.py                 # SQLAlchemy ORM models
 │   └── connection.py             # engine & session
@@ -290,6 +292,27 @@ uvicorn server:app --host 0.0.0.0 --port 8000
 pg_dump -U postgres sign-language-db > sign-wave.sql
 psql  -U postgres -d sign-language-db < sign-wave.sql
 ```
+
+## Monitoring (Prometheus & Grafana)
+
+The backend is instrumented with **Prometheus** metrics (`/metrics`) and comes with pre-provisioned **Grafana** dashboards.
+
+### Tracked Metrics
+- **HTTP Traffic & Latencies**: RPS, status codes (2xx, 4xx, 5xx), and duration percentiles ($p50$, $p95$, $p99$).
+- **ML Performance**: Inference duration histogram (`ml_inference_duration_seconds`) and prediction counter by status (`ml_predictions_total`).
+- **Real-Time Streaming**: Active WebSocket connections (`websocket_active_connections`).
+- **Security & Rate Limiting**: Blocked requests count (`rate_limit_exceeded_total`).
+
+### Running Monitoring Stack (Docker Compose)
+```bash
+cd deploy
+docker compose up -d
+```
+- **Grafana**: `http://localhost:3000` (Default login: `admin` / `admin`)
+  - Auto-configured Prometheus datasource.
+  - Pre-loaded dashboard: **SignWave Platform Overview**.
+- **Prometheus**: `http://localhost:9090` (Scrapes `backend:8000/metrics` every 10s).
+- Note: `/metrics` is accessible within the internal Docker network and is not exposed to the public web via Caddy.
 
 ## Notes
 

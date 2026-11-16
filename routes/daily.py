@@ -8,6 +8,9 @@ from sqlalchemy import func
 from db.connection import get_db
 from db.models import UserDailyTask, DailyTaskTemplate, Gesture, GestureI18n, UserXPLog, User, UserGestureStat, UserStreak
 from core.dependencies import get_current_user_id
+import logging
+
+logger = logging.getLogger("signwave.daily")
 
 router = APIRouter(prefix="/daily-tasks", tags=["Daily Tasks"])
 
@@ -182,7 +185,7 @@ def get_daily_tasks(
             _generate_tasks(user_id, db)
             tasks = _today_tasks(user_id, db)
     except Exception as e:
-        print(f"[daily-tasks] error for user {user_id}: {e}")
+        logger.error(f"[daily-tasks] error for user {user_id}: {e}", exc_info=True)
         raise
 
     templates = _load_templates(tasks, db)
