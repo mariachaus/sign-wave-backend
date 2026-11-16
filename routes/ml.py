@@ -3,7 +3,9 @@ import csv
 import json
 import base64
 import random
+import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
@@ -145,14 +147,38 @@ else:
 
 # ---------------- MODEL RELOAD LOCK ----------------
 
-_reload_lock = threading.Lock()   
-_model_loading = False            
+_reload_lock = threading.Lock()
+_model_loading = False
+
+
+# ---------------- INFERENCE POOL ----------------
+
+_INFERENCE_THREADS = int(os.getenv("INFERENCE_THREADS", "1"))
+_inference_pool = ThreadPoolExecutor(max_workers=_INFERENCE_THREADS, thread_name_prefix="inference")
+
+
+def _run_inference(active_model, input_data: np.ndarray):
+    """Runs the model in a pool thread. Returns the predictions and the pure model time in ms
+    (time spent waiting in the pool's queue is not counted)."""
+    t0 = time.time()
+    prediction = active_model(input_data, training=False).numpy()
+    return prediction, round((time.time() - t0) * 1000, 2)
+
+
+def _to_float_array(values) -> np.ndarray:
+    return np.array(values, dtype=np.float32)
+
+
+async def _infer_async(input_data: np.ndarray):
+    active_model = model
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_inference_pool, _run_inference, active_model, input_data)
 
 
 # ---------------- PREDICT ----------------
 
 @router.post("/predict")
-def predict(data: dict = Body(...)):
+async def predict(data: dict = Body(...)):
     if _model_loading:
         raise HTTPException(status_code=503, detail="Model is reloading, please retry")
     if model is None:
@@ -177,9 +203,7 @@ def predict(data: dict = Body(...)):
         else:
             input_data = np.expand_dims(input_data, axis=0)
 
-        start_time = time.time()
-        prediction = model(input_data, training=False).numpy()
-        inference_ms = round((time.time() - start_time) * 1000, 2)
+        prediction, inference_ms = await _infer_async(input_data)
         print(f"[predict] inference: {inference_ms} ms")
 
         class_id = int(np.argmax(prediction))
@@ -195,6 +219,8 @@ def predict(data: dict = Body(...)):
             "inference_ms": inference_ms,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -205,8 +231,10 @@ def predict(data: dict = Body(...)):
 # ---------------- PREDICT BATCH ----------------
 
 @router.post("/predict_batch")
-def predict_batch(data: dict = Body(...)):
+async def predict_batch(data: dict = Body(...)):
     """Приймає список вікон [[20×450], ...], повертає передбачення для кожного."""
+    if _model_loading:
+        raise HTTPException(status_code=503, detail="Model is reloading, please retry")
     if model is None:
         raise HTTPException(status_code=500, detail="Model is not loaded")
 
@@ -215,11 +243,12 @@ def predict_batch(data: dict = Body(...)):
         raise HTTPException(status_code=400, detail="No windows provided")
 
     try:
-        arr = np.array(windows, dtype=np.float32)   # (N, 20, 450)
+        loop = asyncio.get_running_loop()
+        arr = await loop.run_in_executor(None, _to_float_array, windows)   # (N, 20, 450)
         if arr.ndim != 3 or arr.shape[1:] != (20, 450):
             raise HTTPException(status_code=400, detail=f"Wrong shape: {arr.shape}, expected (N,20,450)")
 
-        preds = model(arr, training=False).numpy()   # (N, num_classes)
+        preds, _ = await _infer_async(arr)   # (N, num_classes)
 
         results = []
         for row in preds:
@@ -386,9 +415,7 @@ async def predict_ws(websocket: WebSocket):
                 input_data = input_data.reshape(1, 20, 450)
             else:
                 input_data = np.expand_dims(input_data, axis=0)
-            t0 = time.time()
-            prediction = model(input_data, training=False).numpy()
-            inference_ms = round((time.time() - t0) * 1000, 2)
+            prediction, inference_ms = await _infer_async(input_data)
             print(f"[ws/predict] inference: {inference_ms} ms")
             class_id = int(np.argmax(prediction))
             confidence = float(prediction[0][class_id])
@@ -416,8 +443,6 @@ async def gesture_ws(websocket: WebSocket):
         await websocket.close()
         return
 
-    import asyncio
-
     frame_buffer: list = []
     pred_history: list = []
 
@@ -431,7 +456,7 @@ async def gesture_ws(websocket: WebSocket):
 
             img_bytes = base64.b64decode(b64)
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             pose_res, hand_res, lm = await loop.run_in_executor(None, _process_frame, img_bytes)
 
             if pose_res is None:
@@ -462,9 +487,8 @@ async def gesture_ws(websocket: WebSocket):
                 continue
 
             inp = np.expand_dims(_add_delta(frame_buffer), axis=0)
-            t0 = time.time()
-            preds = model(inp, training=False).numpy()[0]
-            inference_ms = round((time.time() - t0) * 1000, 2)
+            prediction, inference_ms = await _infer_async(inp)
+            preds = prediction[0]
             print(f"[ws/gesture] inference: {inference_ms} ms")
             cls = int(np.argmax(preds))
             #_log_inference("ws/gesture", LABELS[cls], float(preds[cls]), inference_ms)
