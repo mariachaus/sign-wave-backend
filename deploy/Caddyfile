@@ -13,6 +13,10 @@
         reverse_proxy backend:8000
     }
 
+    handle /grafana* {
+        reverse_proxy grafana:3000
+    }
+
     handle {
         root * /srv
         try_files {path} /index.html
